@@ -1,0 +1,25 @@
+[33mChecking connectivity to the model hosters, this may take a while. To bypass this check, set `DISABLE_MODEL_SOURCE_CHECK` to `True`.[0m
+INFO:     Started server process [15716]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8090 (Press CTRL+C to quit)
+ÐÅÏ¢: ÓÃÌá¹©µÄÄ£Ê½ÎÞ·¨ÕÒµ½ÎÄ¼þ¡£
+D:\Aleph-OCR\apps\ocr-container\.venv\Lib\site-packages\paddle\utils\cpp_extension\extension_utils.py:718: UserWarning: No ccache found. Please be aware that recompiling all source files may be required. You can download and install ccache from: https://github.com/ccache/ccache/blob/master/doc/INSTALL.md
+  warnings.warn(warning_message)
+[32mCreating model: ('PP-LCNet_x1_0_doc_ori', None)[0m
+[32mUsing official model (PP-LCNet_x1_0_doc_ori), the model files will be automatically downloaded and saved in `C:\Users\JingQi\.paddlex\official_models\PP-LCNet_x1_0_doc_ori`.[0m
+Fetching 6 files:   0%|          | 0/6 [00:00<?, ?it/s]Fetching 6 files:  17%|¨€¨ƒ        | 1/6 [00:00<00:03,  1.51it/s]Fetching 6 files:  83%|¨€¨€¨€¨€¨€¨€¨€¨€¨† | 5/6 [00:05<00:01,  1.21s/it]Fetching 6 files: 100%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨€| 6/6 [00:05<00:00,  1.02it/s]
+WARNING: Logging before InitGoogleLogging() is written to STDERR
+I0624 23:05:00.610714 15808 onednn_context.cc:81] oneDNN v3.6.2
+[32mCreating model: ('UVDoc', None)[0m
+[32mUsing official model (UVDoc), the model files will be automatically downloaded and saved in `C:\Users\JingQi\.paddlex\official_models\UVDoc`.[0m
+Fetching 6 files:   0%|          | 0/6 [00:00<?, ?it/s]Fetching 6 files:  17%|¨€¨ƒ        | 1/6 [00:00<00:03,  1.67it/s]Fetching 6 files:  83%|¨€¨€¨€¨€¨€¨€¨€¨€¨† | 5/6 [00:03<00:00,  1.54it/s]Fetching 6 files: 100%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨€| 6/6 [00:03<00:00,  1.85it/s]
+[32mCreating model: ('PP-LCNet_x1_0_textline_ori', None)[0m
+[32mUsing official model (PP-LCNet_x1_0_textline_ori), the model files will be automatically downloaded and saved in `C:\Users\JingQi\.paddlex\official_models\PP-LCNet_x1_0_textline_ori`.[0m
+Fetching 6 files:   0%|          | 0/6 [00:00<?, ?it/s]Fetching 6 files:  17%|¨€¨ƒ        | 1/6 [00:00<00:02,  1.81it/s]Fetching 6 files:  83%|¨€¨€¨€¨€¨€¨€¨€¨€¨† | 5/6 [00:02<00:00,  1.87it/s]Fetching 6 files: 100%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨€| 6/6 [00:02<00:00,  2.23it/s]
+[32mCreating model: ('PP-OCRv5_server_det', None)[0m
+[32mUsing official model (PP-OCRv5_server_det), the model files will be automatically downloaded and saved in `C:\Users\JingQi\.paddlex\official_models\PP-OCRv5_server_det`.[0m
+Fetching 6 files:   0%|          | 0/6 [00:00<?, ?it/s]Fetching 6 files:  17%|¨€¨ƒ        | 1/6 [00:00<00:02,  2.20it/s]Fetching 6 files:  83%|¨€¨€¨€¨€¨€¨€¨€¨€¨† | 5/6 [00:03<00:00,  1.35it/s]Fetching 6 files: 100%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨€| 6/6 [00:03<00:00,  1.65it/s]
+[32mCreating model: ('PP-OCRv5_server_rec', None)[0m
+[32mUsing official model (PP-OCRv5_server_rec), the model files will be automatically downloaded and saved in `C:\Users\JingQi\.paddlex\official_models\PP-OCRv5_server_rec`.[0m
+Fetching 6 files:   0%|          | 0/6 [00:00<?, ?it/s]Fetching 6 files:  17%|¨€¨ƒ        | 1/6 [00:00<00:03,  1.37it/s]Fetching 6 files:  83%|¨€¨€¨€¨€¨€¨€¨€¨€¨† | 5/6 [00:03<00:00,  1.26it/s]Fetching 6 files: 100%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨€| 6/6 [00:03<00:00,  1.52it/s]

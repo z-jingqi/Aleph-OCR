@@ -1,0 +1,27 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "aleph-ocr-gateway-local",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-24",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "vars": {
+    "OCR_ENGINE_URL": "http://127.0.0.1:8090",
+    "JOB_RETENTION_DAYS": "7"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "aleph-ocr-local",
+      "database_id": "local",
+      "migrations_dir": "./migrations"
+    }
+  ],
+  "r2_buckets": [{ "binding": "ASSETS", "bucket_name": "aleph-ocr-local-assets" }],
+  "queues": {
+    "producers": [{ "binding": "OCR_JOBS", "queue": "aleph-ocr-local-jobs" }],
+    "consumers": [{ "queue": "aleph-ocr-local-jobs", "max_batch_size": 5, "max_batch_timeout": 10 }]
+  },
+  "triggers": { "crons": ["17 3 * * *"] },
+  "observability": { "enabled": true, "head_sampling_rate": 1 }
+}

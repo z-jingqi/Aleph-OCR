@@ -6,6 +6,8 @@ All `/v1/*` routes require:
 Authorization: Bearer <api-key>
 ```
 
+API keys are configured as a Worker secret. A JSON object maps client IDs to keys, for example `{"example-client-dev":"..."}`. Jobs and results are isolated by client ID.
+
 ## GET /health
 
 Public gateway health check.
@@ -42,6 +44,8 @@ Returns job metadata and status. Status values:
 - `ready`
 - `failed`
 - `deleted`
+
+Only the client that created a job can read, delete, or fetch its result.
 
 ## GET /v1/jobs/:jobId/result
 

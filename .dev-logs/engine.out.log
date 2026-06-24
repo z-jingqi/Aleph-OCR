@@ -1,0 +1,4 @@
+INFO:     127.0.0.1:8169 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:10154 - "POST /internal/ocr/image HTTP/1.1" 200 OK
+INFO:     127.0.0.1:13133 - "POST /internal/ocr/image HTTP/1.1" 200 OK
+INFO:     127.0.0.1:6217 - "POST /internal/ocr/image HTTP/1.1" 200 OK

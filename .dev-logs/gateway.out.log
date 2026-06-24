@@ -1,0 +1,100 @@
+
+> @aleph-ocr/gateway@0.1.0 dev D:\Aleph-OCR\apps\gateway
+> wrangler dev --config wrangler.local.jsonc --port 8787
+
+
+Cloudflare collects anonymous telemetry about your usage of Wrangler. Learn more at https://github.com/cloudflare/workers-sdk/tree/main/packages/wrangler/telemetry.md
+
+ ⛅️ wrangler 3.114.17 (update available 4.104.0)
+------------------------------------------------
+
+Using vars defined in .dev.vars
+Your Worker and resources are simulated locally via Miniflare. For more information, see: https://developers.cloudflare.com/workers/testing/local-development.
+
+Your worker has access to the following bindings:
+- Queues:
+  - OCR_JOBS: aleph-ocr-local-jobs [simulated locally]
+- D1 Databases:
+  - DB: aleph-ocr-local (local) [simulated locally]
+- R2 Buckets:
+  - ASSETS: aleph-ocr-local-assets [simulated locally]
+- Vars:
+  - OCR_ENGINE_URL: "http://127.0.0.1:8090"
+  - JOB_RETENTION_DAYS: "7"
+  - ALEPH_OCR_API_KEYS: "(hidden)"
+  - OCR_ENGINE_TOKEN: "(hidden)"
+[wrangler-UserWorker:wrn] Miniflare 3 does not currently trigger scheduled Workers automatically.
+Use `--test-scheduled` to forward fetch triggers.
+⎔ Starting local server...
+[wrangler:inf] Ready on http://127.0.0.1:8787
+[wrangler-UserWorker:wrn] The latest compatibility date supported by the installed Cloudflare Workers Runtime is "2025-07-18",
+but you've requested "2026-06-24". Falling back to "2025-07-18"...
+Features enabled by your requested compatibility date may not be available.
+Upgrade to `wrangler@4.104.0` to remove this warning.
+[wrangler:inf] GET /health 200 OK (624ms)
+[wrangler:inf] POST /v1/jobs 202 Accepted (947ms)
+[wrangler:inf] GET /v1/jobs/ocr_bc6d95b9-6246-4222-a5a3-7f67e8dc778a 200 OK (23ms)
+[wrangler:inf] GET /v1/jobs/ocr_bc6d95b9-6246-4222-a5a3-7f67e8dc778a 200 OK (6ms)
+[wrangler:inf] GET /v1/jobs/ocr_bc6d95b9-6246-4222-a5a3-7f67e8dc778a 200 OK (7ms)
+[wrangler:inf] GET /v1/jobs/ocr_bc6d95b9-6246-4222-a5a3-7f67e8dc778a 200 OK (22ms)
+[wrangler:inf] GET /v1/jobs/ocr_bc6d95b9-6246-4222-a5a3-7f67e8dc778a 200 OK (65ms)
+[wrangler:inf] GET /v1/jobs/ocr_bc6d95b9-6246-4222-a5a3-7f67e8dc778a 200 OK (13ms)
+[wrangler:inf] GET /v1/jobs/ocr_bc6d95b9-6246-4222-a5a3-7f67e8dc778a 200 OK (24ms)
+[wrangler:inf] GET /v1/jobs/ocr_bc6d95b9-6246-4222-a5a3-7f67e8dc778a 200 OK (29ms)
+[wrangler:inf] GET /v1/jobs/ocr_bc6d95b9-6246-4222-a5a3-7f67e8dc778a 200 OK (91ms)
+[wrangler:inf] GET /v1/jobs/ocr_bc6d95b9-6246-4222-a5a3-7f67e8dc778a 200 OK (12ms)
+[wrangler:inf] GET /v1/jobs/ocr_bc6d95b9-6246-4222-a5a3-7f67e8dc778a 200 OK (40ms)
+[wrangler:inf] GET /v1/jobs/ocr_bc6d95b9-6246-4222-a5a3-7f67e8dc778a 200 OK (5ms)
+[wrangler:inf] GET /v1/jobs/ocr_bc6d95b9-6246-4222-a5a3-7f67e8dc778a/result 200 OK (22ms)
+[wrangler:inf] GET /v1/jobs/ocr_bc6d95b9-6246-4222-a5a3-7f67e8dc778a 200 OK (114ms)
+[wrangler:inf] GET /v1/jobs/ocr_bc6d95b9-6246-4222-a5a3-7f67e8dc778a/result 200 OK (6ms)
+[wrangler:inf] GET /v1/jobs/ocr_bc6d95b9-6246-4222-a5a3-7f67e8dc778a 200 OK (5ms)
+[wrangler:inf] GET /v1/jobs/ocr_bc6d95b9-6246-4222-a5a3-7f67e8dc778a/result 200 OK (4ms)
+[wrangler:inf] GET /api/me 404 Not Found (78ms)
+[wrangler:inf] GET /api/me 404 Not Found (4ms)
+[wrangler:inf] GET /api/works 404 Not Found (6ms)
+[wrangler:inf] POST /api/auth/login 404 Not Found (7ms)
+[wrangler:inf] POST /api/auth/register 404 Not Found (28ms)
+[wrangler:inf] POST /api/auth/register 404 Not Found (5ms)
+[wrangler:inf] GET /api/me 404 Not Found (38ms)
+[wrangler:inf] GET /api/me 404 Not Found (29ms)
+[wrangler:inf] GET /api/works 404 Not Found (43ms)
+[wrangler:inf] POST /api/auth/register 404 Not Found (80ms)
+[wrangler:inf] POST /api/auth/register 404 Not Found (5ms)
+[wrangler:inf] GET /api/health 404 Not Found (23ms)
+[wrangler:inf] GET /api/health 404 Not Found (2ms)
+[wrangler:inf] GET /api/health 404 Not Found (5ms)
+[wrangler:inf] GET /api/health 404 Not Found (3ms)
+[wrangler:inf] POST /v1/jobs 202 Accepted (662ms)
+[wrangler:inf] GET /v1/jobs/ocr_0d5cffbc-2f91-4045-bd09-b84e37bab577 200 OK (12ms)
+[wrangler:inf] POST /v1/jobs 202 Accepted (583ms)
+[wrangler:inf] GET /v1/jobs/ocr_0d5cffbc-2f91-4045-bd09-b84e37bab577 200 OK (86ms)
+[wrangler:inf] GET /v1/jobs/ocr_7d92b546-e383-4707-b458-2097cc204fe1 200 OK (77ms)
+[wrangler:inf] GET /v1/jobs/ocr_0d5cffbc-2f91-4045-bd09-b84e37bab577 200 OK (5ms)
+[wrangler:inf] GET /v1/jobs/ocr_7d92b546-e383-4707-b458-2097cc204fe1 200 OK (27ms)
+[wrangler:inf] GET /v1/jobs/ocr_0d5cffbc-2f91-4045-bd09-b84e37bab577 200 OK (28ms)
+[wrangler:inf] GET /v1/jobs/ocr_7d92b546-e383-4707-b458-2097cc204fe1 200 OK (78ms)
+[wrangler:inf] GET /v1/jobs/ocr_0d5cffbc-2f91-4045-bd09-b84e37bab577 200 OK (4ms)
+[wrangler:inf] GET /v1/jobs/ocr_7d92b546-e383-4707-b458-2097cc204fe1 200 OK (17ms)
+[wrangler:inf] GET /v1/jobs/ocr_0d5cffbc-2f91-4045-bd09-b84e37bab577 200 OK (4ms)
+[wrangler:inf] GET /v1/jobs/ocr_7d92b546-e383-4707-b458-2097cc204fe1 200 OK (10ms)
+[wrangler:inf] GET /v1/jobs/ocr_0d5cffbc-2f91-4045-bd09-b84e37bab577 200 OK (4ms)
+[wrangler:inf] GET /v1/jobs/ocr_7d92b546-e383-4707-b458-2097cc204fe1 200 OK (8ms)
+[wrangler:inf] GET /v1/jobs/ocr_0d5cffbc-2f91-4045-bd09-b84e37bab577 200 OK (3ms)
+[wrangler:inf] GET /v1/jobs/ocr_7d92b546-e383-4707-b458-2097cc204fe1 200 OK (5ms)
+[wrangler:inf] GET /v1/jobs/ocr_0d5cffbc-2f91-4045-bd09-b84e37bab577 200 OK (4ms)
+[wrangler:inf] GET /v1/jobs/ocr_7d92b546-e383-4707-b458-2097cc204fe1 200 OK (9ms)
+[wrangler:inf] GET /v1/jobs/ocr_0d5cffbc-2f91-4045-bd09-b84e37bab577 200 OK (3ms)
+[wrangler:inf] GET /v1/jobs/ocr_0d5cffbc-2f91-4045-bd09-b84e37bab577/result 200 OK (25ms)
+[wrangler:inf] GET /v1/jobs/ocr_7d92b546-e383-4707-b458-2097cc204fe1 200 OK (8ms)
+[wrangler:inf] GET /v1/jobs/ocr_7d92b546-e383-4707-b458-2097cc204fe1 200 OK (5ms)
+[wrangler:inf] GET /v1/jobs/ocr_7d92b546-e383-4707-b458-2097cc204fe1 200 OK (4ms)
+[wrangler:inf] GET /v1/jobs/ocr_7d92b546-e383-4707-b458-2097cc204fe1/result 200 OK (4ms)
+[wrangler:inf] GET /v1/jobs/ocr_0d5cffbc-2f91-4045-bd09-b84e37bab577 200 OK (5ms)
+[wrangler:inf] GET /v1/jobs/ocr_0d5cffbc-2f91-4045-bd09-b84e37bab577/result 200 OK (50ms)
+[wrangler:inf] GET /v1/jobs/ocr_7d92b546-e383-4707-b458-2097cc204fe1 200 OK (5ms)
+[wrangler:inf] GET /v1/jobs/ocr_7d92b546-e383-4707-b458-2097cc204fe1/result 200 OK (4ms)
+[wrangler:inf] GET /v1/jobs/ocr_0d5cffbc-2f91-4045-bd09-b84e37bab577 200 OK (4ms)
+[wrangler:inf] GET /v1/jobs/ocr_0d5cffbc-2f91-4045-bd09-b84e37bab577/result 200 OK (6ms)
+[wrangler:inf] GET /v1/jobs/ocr_7d92b546-e383-4707-b458-2097cc204fe1 200 OK (5ms)
+[wrangler:inf] GET /v1/jobs/ocr_7d92b546-e383-4707-b458-2097cc204fe1/result 200 OK (5ms)

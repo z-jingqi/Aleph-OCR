@@ -11,6 +11,7 @@
   "scripts": {
     "build": "tsc --noEmit",
     "lint": "tsc --noEmit",
+    "test": "echo shared schemas are covered by gateway tests",
     "clean": "rm -rf dist"
   },
   "dependencies": { "zod": "^3.24.1" },

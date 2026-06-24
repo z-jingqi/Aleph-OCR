@@ -10,9 +10,10 @@ The Worker owns public HTTP behavior:
 - Request validation and file type limits.
 - Sync image OCR proxying for small images.
 - Async job creation, status, result, and deletion.
-- Future D1/R2/Queue integration points.
+- D1 job metadata, R2 source/result storage, and Queue dispatch.
+- Scheduled cleanup of expired files and results.
 
-The prototype uses an in-memory job store. This is not durable across Worker restarts and is only for local development and first integration testing.
+The gateway stores only generic OCR metadata. Client applications should keep their own domain identifiers outside Aleph-OCR and map them to Aleph job IDs in their own systems.
 
 ## OCR Container
 
@@ -33,4 +34,4 @@ PDFs are async by default. The container enforces:
 - `PDF_BATCH_SIZE=5`
 - `PDF_RENDER_DPI=200`
 
-The first production hardening step is to store each page result in R2/D1 so failed pages can be retried without restarting the whole document.
+Current v1 stores a complete result JSON per job. A later hardening step can store each page result separately so failed pages can be retried without restarting the whole document.

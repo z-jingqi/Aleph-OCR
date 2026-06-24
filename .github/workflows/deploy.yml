@@ -1,0 +1,67 @@
+name: Build and deploy Aleph-OCR
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: aleph-ocr-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9.15.4 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm build
+  deploy-gateway:
+    if: github.event_name == 'push'
+    needs: check
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'production' || 'development' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9.15.4 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/prepare-wrangler-config.mjs ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
+        env:
+          ALEPH_OCR_ENGINE_URL_DEV: ${{ secrets.ALEPH_OCR_ENGINE_URL_DEV }}
+          ALEPH_OCR_ENGINE_URL_PROD: ${{ secrets.ALEPH_OCR_ENGINE_URL_PROD }}
+          ALEPH_OCR_D1_DATABASE_ID_DEV: ${{ secrets.ALEPH_OCR_D1_DATABASE_ID_DEV }}
+          ALEPH_OCR_D1_DATABASE_ID_PROD: ${{ secrets.ALEPH_OCR_D1_DATABASE_ID_PROD }}
+          ALEPH_OCR_R2_BUCKET_DEV: ${{ vars.ALEPH_OCR_R2_BUCKET_DEV || 'aleph-ocr-assets-dev' }}
+          ALEPH_OCR_R2_BUCKET_PROD: ${{ vars.ALEPH_OCR_R2_BUCKET_PROD || 'aleph-ocr-assets-prod' }}
+          ALEPH_OCR_QUEUE_DEV: ${{ vars.ALEPH_OCR_QUEUE_DEV || 'aleph-ocr-jobs-dev' }}
+          ALEPH_OCR_QUEUE_PROD: ${{ vars.ALEPH_OCR_QUEUE_PROD || 'aleph-ocr-jobs-prod' }}
+      - run: |
+          if [ -z "$ALEPH_OCR_API_KEYS" ]; then
+            echo "ALEPH_OCR_API_KEYS secret is required"
+            exit 1
+          fi
+          printf "%s" "$ALEPH_OCR_API_KEYS" | ./node_modules/.bin/wrangler secret put ALEPH_OCR_API_KEYS --config apps/gateway/wrangler.generated-${{ github.ref_name == 'main' && 'prod' || 'dev' }}.json
+          if [ -n "$OCR_ENGINE_TOKEN" ]; then
+            printf "%s" "$OCR_ENGINE_TOKEN" | ./node_modules/.bin/wrangler secret put OCR_ENGINE_TOKEN --config apps/gateway/wrangler.generated-${{ github.ref_name == 'main' && 'prod' || 'dev' }}.json
+          fi
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ALEPH_OCR_API_KEYS: ${{ secrets.ALEPH_OCR_API_KEYS }}
+          OCR_ENGINE_TOKEN: ${{ secrets.OCR_ENGINE_TOKEN }}
+      - run: ./node_modules/.bin/wrangler d1 migrations apply aleph-ocr-${{ github.ref_name == 'main' && 'prod' || 'dev' }} --remote --config apps/gateway/wrangler.generated-${{ github.ref_name == 'main' && 'prod' || 'dev' }}.json
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - run: ./node_modules/.bin/wrangler deploy --config apps/gateway/wrangler.generated-${{ github.ref_name == 'main' && 'prod' || 'dev' }}.json
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
