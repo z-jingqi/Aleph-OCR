@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createJob, getJob, requestJobCancel } from '../src/job-store';
+import { createJob, getJob, getResult, requestJobCancel } from '../src/job-store';
 import { processJob } from '../src/index';
 import { fakeEnv, sampleOcrResult } from './helpers';
-import type { OcrDocument } from '@aleph-ocr/shared';
+import type { OcrDocument } from '@aleph-tools/shared';
 
 describe('job lifecycle processing', () => {
   afterEach(() => {
@@ -86,6 +86,41 @@ describe('job lifecycle processing', () => {
     expect(ready).toMatchObject({ status: 'ready', progress: 100, currentPage: 2, totalPages: 2 });
     expect(env.pages.map((page) => page.status)).toEqual(['ready', 'ready']);
     expect([...env.objects.keys()].filter((key) => key.includes('page-results'))).toHaveLength(2);
+  });
+
+  it('processes image conversion jobs to ready output metadata and R2 output', async () => {
+    const env = fakeEnv();
+    const document: OcrDocument = { type: 'image', filename: 'receipt.png', mimeType: 'image/png', sizeBytes: 3 };
+    const job = await createJob(env, 'example-client-dev', document, new File(['abc'], 'receipt.png', { type: 'image/png' }), {
+      tool: 'image.convert',
+      operation: 'image.convert',
+      toolOptions: { targetFormat: 'webp', width: 320, fit: 'inside' },
+    });
+    const fetchMock = vi.fn(async () => new Response(new Uint8Array([4, 5, 6]), {
+      status: 200,
+      headers: {
+        'Content-Type': 'image/webp',
+        'X-Aleph-Tools-Filename': 'receipt.webp',
+        'X-Aleph-Tools-Width': '320',
+        'X-Aleph-Tools-Height': '240',
+        'X-Aleph-Tools-Format': 'webp',
+      },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await processJob(env, job.jobId);
+
+    const ready = await getJob(env, 'example-client-dev', job.jobId);
+    expect(ready).toMatchObject({
+      status: 'ready',
+      tool: 'image.convert',
+      output: { filename: 'receipt.webp', mimeType: 'image/webp', width: 320, height: 240, format: 'webp' },
+    });
+    await expect(getResult(env, ready!)).resolves.toMatchObject({
+      tool: 'image.convert',
+      output: { resultUrl: `/v1/jobs/${job.jobId}/output` },
+    });
+    expect([...env.objects.keys()].some((key) => key.includes('outputs/') && key.endsWith('/receipt.webp'))).toBe(true);
   });
 
   it('honors cancel requests between PDF pages and does not write ready result', async () => {

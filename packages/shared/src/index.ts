@@ -1,16 +1,56 @@
 import { z } from 'zod';
 
-export const ALEPH_OCR_VERSION = '0.1.0';
+export const ALEPH_TOOLS_VERSION = '0.1.0';
+export const ALEPH_OCR_VERSION = ALEPH_TOOLS_VERSION;
 export const MAX_SYNC_IMAGE_SIZE_BYTES = 10 * 1024 * 1024;
 export const MAX_PDF_PAGES = 100;
 export const PDF_BATCH_SIZE = 5;
 export const PDF_RENDER_DPI = 200;
+
+export const ToolTypeSchema = z.enum(['ocr', 'image.convert']);
+export type ToolType = z.infer<typeof ToolTypeSchema>;
 
 export const DocumentTypeSchema = z.enum(['image', 'pdf']);
 export type DocumentType = z.infer<typeof DocumentTypeSchema>;
 
 export const JobStatusSchema = z.enum(['queued', 'processing', 'cancel_requested', 'cancelled', 'ready', 'failed', 'deleted']);
 export type JobStatus = z.infer<typeof JobStatusSchema>;
+
+export const ApiErrorCodeSchema = z.enum([
+  'VALIDATION_ERROR',
+  'UNAUTHORIZED',
+  'STORAGE_UNAVAILABLE',
+  'WORKFLOW_UNAVAILABLE',
+  'ENGINE_UNAVAILABLE',
+  'UNSUPPORTED_MEDIA_TYPE',
+  'UNSUPPORTED_FORMAT',
+  'FILE_TOO_LARGE',
+  'JOB_NOT_FOUND',
+  'JOB_NOT_READY',
+  'JOB_FAILED',
+  'JOB_CANCELLED',
+  'JOB_DELETED',
+  'RESULT_NOT_FOUND',
+  'OUTPUT_NOT_FOUND',
+  'CANCEL_NOT_ALLOWED',
+  'IDEMPOTENCY_CONFLICT',
+  'RATE_LIMITED',
+  'INTERNAL_ERROR',
+]);
+export type ApiErrorCode = z.infer<typeof ApiErrorCodeSchema>;
+
+export const ApiErrorSchema = z.object({
+  code: ApiErrorCodeSchema,
+  message: z.string(),
+  httpStatus: z.number().int(),
+  requestId: z.string(),
+  jobId: z.string().optional(),
+  jobStatus: JobStatusSchema.optional(),
+  stage: z.string().optional(),
+  retryable: z.boolean(),
+  terminal: z.boolean(),
+});
+export type ApiError = z.infer<typeof ApiErrorSchema>;
 
 export const JobStageSchema = z.enum([
   'queued',
@@ -76,8 +116,48 @@ export const OcrResultSchema = z.object({
 });
 export type OcrResult = z.infer<typeof OcrResultSchema>;
 
+export const ImageConvertFormatSchema = z.enum(['png', 'jpeg', 'webp', 'avif']);
+export type ImageConvertFormat = z.infer<typeof ImageConvertFormatSchema>;
+
+export const ImageConvertFitSchema = z.enum(['contain', 'cover', 'inside']);
+export type ImageConvertFit = z.infer<typeof ImageConvertFitSchema>;
+
+export const ImageConvertOptionsSchema = z.object({
+  targetFormat: ImageConvertFormatSchema,
+  quality: z.number().int().min(1).max(100).optional(),
+  width: z.number().int().positive().optional(),
+  height: z.number().int().positive().optional(),
+  fit: ImageConvertFitSchema.default('inside'),
+});
+export type ImageConvertOptions = z.infer<typeof ImageConvertOptionsSchema>;
+
+export const ImageConvertOutputSchema = z.object({
+  filename: z.string(),
+  mimeType: z.string(),
+  sizeBytes: z.number().int().nonnegative(),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  format: ImageConvertFormatSchema,
+  resultUrl: z.string(),
+});
+export type ImageConvertOutput = z.infer<typeof ImageConvertOutputSchema>;
+
+export const ImageConvertResultSchema = z.object({
+  jobId: z.string().optional(),
+  status: JobStatusSchema.default('ready'),
+  tool: z.literal('image.convert'),
+  output: ImageConvertOutputSchema,
+  metadata: z.record(z.unknown()).optional(),
+});
+export type ImageConvertResult = z.infer<typeof ImageConvertResultSchema>;
+
+export const ToolResultSchema = z.union([OcrResultSchema, ImageConvertResultSchema]);
+export type ToolResult = z.infer<typeof ToolResultSchema>;
+
 export const OcrJobSchema = z.object({
   jobId: z.string(),
+  tool: ToolTypeSchema.optional(),
+  operation: z.string().optional(),
   status: JobStatusSchema,
   progress: z.number().int().min(0).max(100).default(0),
   stage: JobStageSchema.optional(),
@@ -89,6 +169,11 @@ export const OcrJobSchema = z.object({
   expiresAt: z.string().optional(),
   completedAt: z.string().optional(),
   error: z.string().optional(),
+  terminal: z.boolean().optional(),
+  cancelable: z.boolean().optional(),
+  retryable: z.boolean().optional(),
+  resultAvailable: z.boolean().optional(),
+  outputAvailable: z.boolean().optional(),
 });
 export type OcrJob = z.infer<typeof OcrJobSchema>;
 
@@ -131,6 +216,8 @@ export const EngineInfoSchema = z.object({
     image: z.boolean(),
     pdf: z.boolean(),
     syncImage: z.boolean(),
+    imageConvert: z.boolean().optional(),
+    imageConvertFormats: z.array(ImageConvertFormatSchema).optional(),
     asyncJobs: z.boolean(),
     layout: z.boolean(),
     tables: z.boolean(),
@@ -145,7 +232,7 @@ export const EngineInfoSchema = z.object({
 export type EngineInfo = z.infer<typeof EngineInfoSchema>;
 
 export function isSupportedImageMime(mimeType: string): boolean {
-  return ['image/png', 'image/jpeg', 'image/webp', 'image/tiff', 'image/bmp'].includes(mimeType);
+  return ['image/png', 'image/jpeg', 'image/webp', 'image/tiff', 'image/bmp', 'image/heic', 'image/heif'].includes(mimeType);
 }
 
 export function isSupportedPdfMime(mimeType: string): boolean {

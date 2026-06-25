@@ -14,7 +14,7 @@ import {
   setJobResult,
   updateJobProgress,
 } from '../src/job-store';
-import type { OcrDocument, OcrResult } from '@aleph-ocr/shared';
+import type { OcrDocument, OcrResult } from '@aleph-tools/shared';
 import { fakeEnv } from './helpers';
 
 describe('durable job store', () => {

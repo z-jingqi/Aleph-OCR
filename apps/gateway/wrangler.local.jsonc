@@ -1,11 +1,12 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
-  "name": "aleph-ocr-gateway-local",
+  "name": "aleph-tools-gateway-local",
   "main": "src/index.ts",
   "compatibility_date": "2026-06-24",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "vars": {
+    "ALEPH_TOOLS_ENGINE_URL": "http://127.0.0.1:8090",
     "OCR_ENGINE_URL": "http://127.0.0.1:8090",
     "JOB_RETENTION_DAYS": "7"
   },

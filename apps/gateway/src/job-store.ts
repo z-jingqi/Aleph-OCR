@@ -1,4 +1,5 @@
 import type {
+  ImageConvertOptions,
   JobStage,
   JobStatus,
   OcrDocument,
@@ -8,8 +9,11 @@ import type {
   OcrPage,
   OcrJobPageStatus,
   OcrResult,
+  ToolResult,
+  ToolType,
+  ImageConvertResult,
   WebhookDeliveryStatus,
-} from '@aleph-ocr/shared';
+} from '@aleph-tools/shared';
 
 export interface JobStoreEnv {
   DB?: D1Database;
@@ -35,8 +39,14 @@ type JobRow = {
   callback_url: string | null;
   callback_metadata_json: string | null;
   idempotency_key: string | null;
+  idempotency_fingerprint: string | null;
   workflow_id: string | null;
   cancelled_at: string | null;
+  tool: ToolType;
+  operation: string | null;
+  tool_options_json: string | null;
+  output_r2_key: string | null;
+  output_json: string | null;
   completed_at: string | null;
   created_at: string;
   updated_at: string;
@@ -97,8 +107,14 @@ export type StoredJob = OcrJob & {
   callbackUrl?: string;
   callbackMetadata?: Record<string, unknown>;
   idempotencyKey?: string;
+  idempotencyFingerprint?: string;
   workflowId?: string;
   cancelledAt?: string;
+  tool: ToolType;
+  operation?: string;
+  toolOptions?: Record<string, unknown>;
+  outputR2Key?: string;
+  output?: Record<string, unknown>;
 };
 
 export type JobEvent = OcrJobEvent & {
@@ -124,7 +140,11 @@ export type CreateJobOptions = {
   callbackUrl?: string;
   callbackMetadata?: Record<string, unknown>;
   idempotencyKey?: string;
+  idempotencyFingerprint?: string;
   workflowId?: string;
+  tool?: ToolType;
+  operation?: string;
+  toolOptions?: ImageConvertOptions | Record<string, unknown>;
 };
 
 export type JobProgressPatch = {
@@ -139,6 +159,7 @@ export type JobProgressPatch = {
 
 const SOURCE_PREFIX = 'sources';
 const RESULT_PREFIX = 'results';
+const OUTPUT_PREFIX = 'outputs';
 const PAGE_RESULT_PREFIX = 'page-results';
 const PROCESSING_LEASE_SECONDS = 15 * 60;
 const WEBHOOK_RETRY_DELAYS_SECONDS = [60, 5 * 60, 15 * 60, 60 * 60, 6 * 60 * 60];
@@ -174,8 +195,9 @@ export async function createJob(
     `INSERT INTO ocr_jobs
       (job_id, client_id, status, progress, stage, current_page, total_pages, document_json, source_r2_key, result_r2_key,
        error, attempt_count, processing_started_at, processing_lease_until, callback_url, callback_metadata_json,
-       idempotency_key, workflow_id, cancelled_at, completed_at, created_at, updated_at, expires_at)
-     VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, NULL, 0, NULL, NULL, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)`,
+       idempotency_key, idempotency_fingerprint, workflow_id, cancelled_at, tool, operation, tool_options_json, output_r2_key, output_json,
+       completed_at, created_at, updated_at, expires_at)
+     VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, NULL, 0, NULL, NULL, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?)`,
   )
     .bind(
       jobId,
@@ -188,7 +210,11 @@ export async function createJob(
       options.callbackUrl ?? null,
       options.callbackMetadata ? JSON.stringify(options.callbackMetadata) : null,
       options.idempotencyKey ?? null,
+      options.idempotencyFingerprint ?? null,
       options.workflowId ?? null,
+      options.tool ?? 'ocr',
+      options.operation ?? null,
+      options.toolOptions ? JSON.stringify(options.toolOptions) : null,
       timestamp,
       timestamp,
       expiresAt,
@@ -207,9 +233,13 @@ export async function createJob(
     updatedAt: timestamp,
     expiresAt,
     attemptCount: 0,
+    tool: options.tool ?? 'ocr',
+    ...(options.operation ? { operation: options.operation } : {}),
+    ...(options.toolOptions ? { toolOptions: options.toolOptions } : {}),
     ...(options.callbackUrl ? { callbackUrl: options.callbackUrl } : {}),
     ...(options.callbackMetadata ? { callbackMetadata: options.callbackMetadata } : {}),
     ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
+    ...(options.idempotencyFingerprint ? { idempotencyFingerprint: options.idempotencyFingerprint } : {}),
     ...(options.workflowId ? { workflowId: options.workflowId } : {}),
   };
 
@@ -226,6 +256,20 @@ export async function getJobByIdempotencyKey(
     .bind(clientId, idempotencyKey)
     .first<JobRow>();
   return row ? mapJob(row) : null;
+}
+
+export async function countActiveJobsForClient(
+  env: JobStoreEnv & { DB: D1Database },
+  clientId: string,
+): Promise<number> {
+  const rows = await env.DB.prepare(
+    `SELECT job_id FROM ocr_jobs
+     WHERE client_id = ? AND status IN ('queued', 'processing', 'cancel_requested')
+     LIMIT 1000`,
+  )
+    .bind(clientId)
+    .all<{ job_id: string }>();
+  return rows.results.length;
 }
 
 export async function getJob(
@@ -388,11 +432,19 @@ export async function getSourceFile(
 export async function getResult(
   env: JobStoreEnv & { ASSETS: R2Bucket },
   job: StoredJob,
-): Promise<OcrResult | null> {
+): Promise<ToolResult | null> {
   if (!job.resultR2Key) return null;
   const object = await env.ASSETS.get(job.resultR2Key);
   if (!object) return null;
-  return JSON.parse(await object.text()) as OcrResult;
+  return JSON.parse(await object.text()) as ToolResult;
+}
+
+export async function getOutputFile(
+  env: JobStoreEnv & { ASSETS: R2Bucket },
+  job: StoredJob,
+): Promise<R2ObjectBody | null> {
+  if (!job.outputR2Key) return null;
+  return env.ASSETS.get(job.outputR2Key);
 }
 
 export async function initializeJobPages(
@@ -623,6 +675,67 @@ export async function setJobResult(
   return updated;
 }
 
+export async function setImageConvertResult(
+  env: JobStoreEnv & { DB: D1Database; ASSETS: R2Bucket },
+  job: StoredJob,
+  output: { bytes: ArrayBuffer; filename: string; mimeType: string; width: number; height: number; format: 'png' | 'jpeg' | 'webp' | 'avif' },
+): Promise<StoredJob> {
+  const outputR2Key = `${OUTPUT_PREFIX}/${job.clientId}/${job.jobId}/${safeR2Name(output.filename)}`;
+  await env.ASSETS.put(outputR2Key, output.bytes, {
+    httpMetadata: { contentType: output.mimeType },
+    customMetadata: { jobId: job.jobId, clientId: job.clientId, tool: 'image.convert' },
+  });
+
+  const resultR2Key = `${RESULT_PREFIX}/${job.clientId}/${job.jobId}.json`;
+  const result: ImageConvertResult = {
+    jobId: job.jobId,
+    status: 'ready',
+    tool: 'image.convert',
+    output: {
+      filename: output.filename,
+      mimeType: output.mimeType,
+      sizeBytes: output.bytes.byteLength,
+      width: output.width,
+      height: output.height,
+      format: output.format,
+      resultUrl: `/v1/jobs/${job.jobId}/output`,
+    },
+    metadata: job.callbackMetadata ?? {},
+  };
+  await env.ASSETS.put(resultR2Key, JSON.stringify(result), {
+    httpMetadata: { contentType: 'application/json' },
+    customMetadata: { jobId: job.jobId, clientId: job.clientId, tool: 'image.convert' },
+  });
+
+  const completedAt = new Date().toISOString();
+  const update = await env.DB.prepare(
+    `UPDATE ocr_jobs
+     SET status = ?, progress = ?, stage = ?, current_page = ?, total_pages = ?, result_r2_key = ?,
+         output_r2_key = ?, output_json = ?, error = NULL, processing_started_at = NULL,
+         processing_lease_until = NULL, completed_at = ?, updated_at = ?
+     WHERE job_id = ? AND status NOT IN ('cancel_requested', 'cancelled', 'deleted')`,
+  )
+    .bind('ready', 100, 'ready', 1, 1, resultR2Key, outputR2Key, JSON.stringify(result.output), completedAt, completedAt, job.jobId)
+    .run();
+  if (!hasChangedRows(update)) {
+    await Promise.all([env.ASSETS.delete(outputR2Key), env.ASSETS.delete(resultR2Key)]);
+    const latest = await getJobForProcessing(env, job.jobId);
+    if (latest && isCancelRequested(latest)) await completeCancelledJob(env, latest);
+    throw new Error('Job was cancelled before result could be stored');
+  }
+
+  const updated = await getJobForProcessing(env, job.jobId);
+  if (!updated) throw new Error('Ready image conversion job not found');
+  const event = await appendJobEvent(env, updated, 'job.ready', { resultUrl: `/v1/jobs/${job.jobId}/result`, outputUrl: `/v1/jobs/${job.jobId}/output` });
+  await createWebhookDeliveryForEvent(env, updated, event, {
+    event: 'tool.job.ready',
+    job: publicJob(updated),
+    resultUrl: `/v1/jobs/${job.jobId}/result`,
+    outputUrl: `/v1/jobs/${job.jobId}/output`,
+  });
+  return updated;
+}
+
 export async function failJob(
   env: JobStoreEnv & { DB: D1Database },
   job: StoredJob,
@@ -645,9 +758,16 @@ export async function failJob(
   const event = events.at(-1);
   if (event) {
     await createWebhookDeliveryForEvent(env, updated, event, {
-      event: 'ocr.job.failed',
+      event: updated.tool === 'ocr' ? 'ocr.job.failed' : 'tool.job.failed',
       job: publicJob(updated),
-      error,
+      error: {
+        code: 'JOB_FAILED',
+        message: error,
+        jobStatus: updated.status,
+        stage: updated.stage,
+        retryable: false,
+        terminal: true,
+      },
     });
   }
   return updated;
@@ -659,8 +779,16 @@ async function createCancelledWebhook(
   event: JobEvent,
 ): Promise<void> {
   await createWebhookDeliveryForEvent(env, job, event, {
-    event: 'ocr.job.cancelled',
+    event: job.tool === 'ocr' ? 'ocr.job.cancelled' : 'tool.job.cancelled',
     job: publicJob(job),
+    error: {
+      code: 'JOB_CANCELLED',
+      message: 'Job was cancelled',
+      jobStatus: job.status,
+      stage: job.stage,
+      retryable: false,
+      terminal: true,
+    },
   });
 }
 
@@ -728,6 +856,7 @@ export async function appendJobEvent(
     status: job.status,
     progress: job.progress,
     stage: job.stage,
+    job: publicJob(job),
     ...(job.currentPage !== undefined ? { currentPage: job.currentPage } : {}),
     ...(job.totalPages !== undefined ? { totalPages: job.totalPages } : {}),
     ...(job.error ? { error: job.error } : {}),
@@ -848,8 +977,11 @@ export async function markWebhookFailed(
 }
 
 export function publicJob(job: StoredJob): OcrJob {
+  const terminal = TERMINAL_STATUSES.has(job.status);
   return {
     jobId: job.jobId,
+    tool: job.tool,
+    ...(job.operation ? { operation: job.operation } : {}),
     status: job.status,
     progress: job.progress,
     ...(job.stage ? { stage: job.stage } : {}),
@@ -861,6 +993,11 @@ export function publicJob(job: StoredJob): OcrJob {
     expiresAt: job.expiresAt,
     ...(job.completedAt ? { completedAt: job.completedAt } : {}),
     ...(job.error ? { error: job.error } : {}),
+    terminal,
+    cancelable: job.status === 'queued' || job.status === 'processing',
+    retryable: !terminal || job.status === 'failed',
+    resultAvailable: job.status === 'ready' && Boolean(job.resultR2Key),
+    outputAvailable: job.status === 'ready' && Boolean(job.outputR2Key),
   };
 }
 
@@ -876,15 +1013,21 @@ function mapJob(row: JobRow): StoredJob {
     document: JSON.parse(row.document_json) as OcrDocument,
     sourceR2Key: row.source_r2_key,
     ...(row.result_r2_key ? { resultR2Key: row.result_r2_key } : {}),
+    ...(row.output_r2_key ? { outputR2Key: row.output_r2_key } : {}),
+    ...(row.output_json ? { output: JSON.parse(row.output_json) as Record<string, unknown> } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     expiresAt: row.expires_at,
     attemptCount: Number(row.attempt_count ?? 0),
+    tool: row.tool ?? 'ocr',
+    ...(row.operation ? { operation: row.operation } : {}),
+    ...(row.tool_options_json ? { toolOptions: JSON.parse(row.tool_options_json) as Record<string, unknown> } : {}),
     ...(row.processing_started_at ? { processingStartedAt: row.processing_started_at } : {}),
     ...(row.processing_lease_until ? { processingLeaseUntil: row.processing_lease_until } : {}),
     ...(row.callback_url ? { callbackUrl: row.callback_url } : {}),
     ...(row.callback_metadata_json ? { callbackMetadata: JSON.parse(row.callback_metadata_json) as Record<string, unknown> } : {}),
     ...(row.idempotency_key ? { idempotencyKey: row.idempotency_key } : {}),
+    ...(row.idempotency_fingerprint ? { idempotencyFingerprint: row.idempotency_fingerprint } : {}),
     ...(row.workflow_id ? { workflowId: row.workflow_id } : {}),
     ...(row.cancelled_at ? { cancelledAt: row.cancelled_at } : {}),
     ...(row.completed_at ? { completedAt: row.completed_at } : {}),
@@ -931,6 +1074,7 @@ async function deleteJobObjects(env: JobStoreEnv & { ASSETS: R2Bucket }, job: St
   await Promise.all([
     env.ASSETS.delete(job.sourceR2Key),
     ...(job.resultR2Key ? [env.ASSETS.delete(job.resultR2Key)] : []),
+    ...(job.outputR2Key ? [env.ASSETS.delete(job.outputR2Key)] : []),
     ...pageDeletes,
   ]);
 }

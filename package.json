@@ -1,14 +1,26 @@
 {
-  "name": "aleph-ocr",
+  "name": "aleph-tools",
   "version": "0.1.0",
   "private": true,
-  "description": "Shared OCR gateway and PaddleOCR container service for Aleph projects.",
+  "description": "Shared tools gateway with OCR and image conversion services for Aleph projects.",
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
     "test": "turbo run test",
     "lint": "turbo run lint",
-    "clean": "turbo run clean"
+    "clean": "turbo run clean",
+    "deploy:check:dev": "node scripts/check-deploy-env.mjs dev",
+    "deploy:check:prod": "node scripts/check-deploy-env.mjs prod",
+    "deploy:check:ci:dev": "node scripts/check-deploy-env.mjs dev --ci",
+    "deploy:check:ci:prod": "node scripts/check-deploy-env.mjs prod --ci",
+    "deploy:generate:dev": "node scripts/prepare-wrangler-config.mjs dev",
+    "deploy:generate:prod": "node scripts/prepare-wrangler-config.mjs prod",
+    "deploy:dry-run:dev": "pnpm deploy:generate:dev && pnpm --dir apps/gateway exec wrangler deploy --dry-run --containers-rollout=none --config wrangler.generated-dev.json",
+    "deploy:dry-run:prod": "pnpm deploy:generate:prod && pnpm --dir apps/gateway exec wrangler deploy --dry-run --containers-rollout=none --config wrangler.generated-prod.json",
+    "deploy:migrate:dev": "pnpm deploy:generate:dev && pnpm --dir apps/gateway exec wrangler d1 migrations apply aleph-tools-dev --remote --config wrangler.generated-dev.json",
+    "deploy:migrate:prod": "pnpm deploy:generate:prod && pnpm --dir apps/gateway exec wrangler d1 migrations apply aleph-tools-prod --remote --config wrangler.generated-prod.json",
+    "deploy:dev": "pnpm deploy:generate:dev && pnpm --dir apps/gateway exec wrangler deploy --config wrangler.generated-dev.json",
+    "deploy:prod": "pnpm deploy:generate:prod && pnpm --dir apps/gateway exec wrangler deploy --config wrangler.generated-prod.json"
   },
   "packageManager": "pnpm@9.15.4",
   "engines": {

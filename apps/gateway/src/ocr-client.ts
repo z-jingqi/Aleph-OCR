@@ -1,9 +1,34 @@
-import { EngineInfoSchema, OcrResultSchema, type EngineInfo, type OcrResult } from '@aleph-ocr/shared';
+import {
+  EngineInfoSchema,
+  OcrResultSchema,
+  type EngineInfo,
+  type ImageConvertFormat,
+  type ImageConvertOptions,
+  type OcrResult,
+} from '@aleph-tools/shared';
 
-export interface OcrClientEnv {
+export interface ToolsClientEnv {
+  ALEPH_TOOLS_ENGINE_URL?: string;
+  TOOLS_ENGINE_TOKEN?: string;
   OCR_ENGINE_URL?: string;
   OCR_ENGINE_TOKEN?: string;
+  TOOLS_ENGINE?: {
+    getByName(name: string): {
+      fetch(request: Request): Promise<Response>;
+    };
+  };
 }
+
+export type OcrClientEnv = ToolsClientEnv;
+
+export type ImageConvertResponse = {
+  bytes: ArrayBuffer;
+  filename: string;
+  mimeType: string;
+  width: number;
+  height: number;
+  format: ImageConvertFormat;
+};
 
 export class OcrEngineError extends Error {
   constructor(message: string, public status = 503) {
@@ -12,13 +37,13 @@ export class OcrEngineError extends Error {
   }
 }
 
-export async function getEngineInfo(env: OcrClientEnv): Promise<EngineInfo> {
+export async function getEngineInfo(env: ToolsClientEnv): Promise<EngineInfo> {
   const response = await engineFetch(env, '/health', { method: 'GET' });
   const data = await response.json();
   return EngineInfoSchema.parse(data);
 }
 
-export async function ocrImage(env: OcrClientEnv, file: File): Promise<OcrResult> {
+export async function ocrImage(env: ToolsClientEnv, file: File): Promise<OcrResult> {
   const form = new FormData();
   form.append('file', file, file.name);
   const response = await engineFetch(env, '/internal/ocr/image', { method: 'POST', body: form });
@@ -26,7 +51,7 @@ export async function ocrImage(env: OcrClientEnv, file: File): Promise<OcrResult
   return OcrResultSchema.parse(data);
 }
 
-export async function ocrPdf(env: OcrClientEnv, file: File): Promise<OcrResult> {
+export async function ocrPdf(env: ToolsClientEnv, file: File): Promise<OcrResult> {
   const form = new FormData();
   form.append('file', file, file.name);
   const response = await engineFetch(env, '/internal/ocr/pdf', { method: 'POST', body: form });
@@ -34,7 +59,7 @@ export async function ocrPdf(env: OcrClientEnv, file: File): Promise<OcrResult> 
   return OcrResultSchema.parse(data);
 }
 
-export async function getPdfInfo(env: OcrClientEnv, file: File): Promise<{ pageCount: number }> {
+export async function getPdfInfo(env: ToolsClientEnv, file: File): Promise<{ pageCount: number }> {
   const form = new FormData();
   form.append('file', file, file.name);
   const response = await engineFetch(env, '/internal/ocr/pdf-info', { method: 'POST', body: form });
@@ -45,7 +70,7 @@ export async function getPdfInfo(env: OcrClientEnv, file: File): Promise<{ pageC
   return { pageCount: Number(data.pageCount) };
 }
 
-export async function ocrPdfPage(env: OcrClientEnv, file: File, pageIndex: number): Promise<OcrResult> {
+export async function ocrPdfPage(env: ToolsClientEnv, file: File, pageIndex: number): Promise<OcrResult> {
   const form = new FormData();
   form.append('file', file, file.name);
   const response = await engineFetch(env, `/internal/ocr/pdf-page?page_index=${pageIndex}`, { method: 'POST', body: form });
@@ -53,16 +78,45 @@ export async function ocrPdfPage(env: OcrClientEnv, file: File, pageIndex: numbe
   return OcrResultSchema.parse(data);
 }
 
-async function engineFetch(env: OcrClientEnv, path: string, init: RequestInit): Promise<Response> {
-  const baseUrl = env.OCR_ENGINE_URL ?? 'http://127.0.0.1:8090';
+export async function convertImage(env: ToolsClientEnv, file: File, options: ImageConvertOptions): Promise<ImageConvertResponse> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  form.append('target_format', options.targetFormat);
+  form.append('fit', options.fit ?? 'inside');
+  if (options.quality !== undefined) form.append('quality', String(options.quality));
+  if (options.width !== undefined) form.append('width', String(options.width));
+  if (options.height !== undefined) form.append('height', String(options.height));
+
+  const response = await engineFetch(env, '/internal/image/convert', { method: 'POST', body: form });
+  const bytes = await response.arrayBuffer();
+  const filename = response.headers.get('X-Aleph-Tools-Filename') ?? convertedFilename(file.name, options.targetFormat);
+  const mimeType = response.headers.get('Content-Type')?.split(';')[0] ?? mimeTypeForFormat(options.targetFormat);
+  const width = Number(response.headers.get('X-Aleph-Tools-Width'));
+  const height = Number(response.headers.get('X-Aleph-Tools-Height'));
+  const format = response.headers.get('X-Aleph-Tools-Format') ?? options.targetFormat;
+  if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0 || !isImageConvertFormat(format)) {
+    throw new OcrEngineError('Image conversion engine returned invalid metadata', 500);
+  }
+  return { bytes, filename, mimeType, width, height, format };
+}
+
+async function engineFetch(env: ToolsClientEnv, path: string, init: RequestInit): Promise<Response> {
   const headers = new Headers(init.headers);
-  if (env.OCR_ENGINE_TOKEN) {
-    headers.set('X-Aleph-OCR-Internal-Token', env.OCR_ENGINE_TOKEN);
+  const token = env.TOOLS_ENGINE_TOKEN ?? env.OCR_ENGINE_TOKEN;
+  if (token) {
+    headers.set('X-Aleph-Tools-Internal-Token', token);
+    headers.set('X-Aleph-OCR-Internal-Token', token);
   }
 
   let response: Response;
   try {
-    response = await fetch(`${baseUrl}${path}`, { ...init, headers });
+    if (env.TOOLS_ENGINE) {
+      const request = new Request(new URL(path, 'http://tools-engine.internal'), { ...init, headers });
+      response = await env.TOOLS_ENGINE.getByName('shared').fetch(request);
+    } else {
+      const baseUrl = env.ALEPH_TOOLS_ENGINE_URL || env.OCR_ENGINE_URL || 'http://127.0.0.1:8090';
+      response = await fetch(`${baseUrl}${path}`, { ...init, headers });
+    }
   } catch (error) {
     throw new OcrEngineError(`OCR engine is unavailable: ${error instanceof Error ? error.message : 'unknown error'}`);
   }
@@ -72,4 +126,18 @@ async function engineFetch(env: OcrClientEnv, path: string, init: RequestInit): 
     throw new OcrEngineError(text || `OCR engine returned ${response.status}`, response.status);
   }
   return response;
+}
+
+function convertedFilename(filename: string, format: ImageConvertFormat): string {
+  const extension = format === 'jpeg' ? 'jpg' : format;
+  const base = filename.replace(/\.[^.]+$/, '') || 'image';
+  return `${base}.${extension}`;
+}
+
+function mimeTypeForFormat(format: ImageConvertFormat): string {
+  return `image/${format === 'jpeg' ? 'jpeg' : format}`;
+}
+
+function isImageConvertFormat(value: string): value is ImageConvertFormat {
+  return ['png', 'jpeg', 'webp', 'avif'].includes(value);
 }

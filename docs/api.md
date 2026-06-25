@@ -6,7 +6,9 @@ All `/v1/*` routes require:
 Authorization: Bearer <api-key>
 ```
 
-API keys are configured as a Worker secret. A JSON object maps client IDs to keys, for example `{"example-client-dev":"..."}`. Jobs and results are isolated by client ID.
+API keys are configured as the `ALEPH_TOOLS_API_KEYS` Worker secret. A JSON object maps client IDs to keys, for example `{"example-client-dev":"..."}`. Jobs and results are isolated by client ID. Legacy `ALEPH_OCR_API_KEYS` is still accepted as a fallback.
+
+For production client behavior, stable error codes, retry guidance, SSE reconnects, and webhook verification, see [External App Integration](./external-app-integration.md).
 
 ## GET /health
 
@@ -14,18 +16,30 @@ Public gateway health check.
 
 ## GET /v1/engines
 
-Returns the configured OCR engine and capabilities.
+Returns the configured tools engine and capabilities.
 
 ## POST /v1/ocr/sync
 
 Synchronous image OCR. Multipart form field:
 
-- `file`: PNG, JPEG, WebP, TIFF, or BMP image.
+- `file`: PNG, JPEG, WebP, TIFF, BMP, HEIC, or HEIF image.
 
 Limits:
 
 - Image only.
 - Max 10 MB.
+
+## POST /v1/tools/image/convert/sync
+
+Synchronous image conversion. Multipart form fields:
+
+- `file`: PNG, JPEG, WebP, TIFF, BMP, HEIC, or HEIF image.
+- `targetFormat`: `png`, `jpeg`, `webp`, or `avif`.
+- `quality`: optional integer from 1 to 100.
+- `width` and `height`: optional positive integers.
+- `fit`: optional `contain`, `cover`, or `inside`; defaults to `inside`.
+
+Returns the converted binary image directly. `Content-Type` matches the target format and `Content-Disposition` includes the converted filename. Max upload size is 10 MB.
 
 ## POST /v1/jobs
 
@@ -40,6 +54,12 @@ Optional header:
 - `Idempotency-Key`: scoped to the authenticated client. Reusing the same key returns the original job instead of creating another job.
 
 Images and PDFs are accepted. PDFs are always async and are processed page by page. The production target is 100 pages or fewer.
+
+## POST /v1/tools/image/convert
+
+Creates an async image conversion job. It accepts the same conversion fields as the sync route plus optional `callbackUrl`, `metadata`, and `Idempotency-Key`.
+
+Async conversion results are stored in R2. `GET /v1/jobs/:jobId/result` returns metadata and `GET /v1/jobs/:jobId/output` downloads the converted binary file.
 
 ## GET /v1/jobs/:jobId
 
@@ -77,9 +97,13 @@ Clients can reconnect with `Last-Event-ID` to receive events after the last seen
 
 ## GET /v1/jobs/:jobId/result
 
-Returns the complete OCR result once ready.
+Returns the complete OCR result once ready, or image conversion output metadata for `tool: "image.convert"` jobs.
 
 If the job is `queued`, `processing`, or `cancel_requested`, this returns `409`. Cancelled, failed, deleted, and missing result states return an error instead of a partial result.
+
+## GET /v1/jobs/:jobId/output
+
+Downloads a ready job's binary output. This is currently used by `image.convert` jobs. Non-ready jobs return `409`.
 
 ## POST /v1/jobs/:jobId/cancel
 
@@ -87,7 +111,7 @@ Requests cancellation. Queued jobs become `cancelled` immediately. Processing jo
 
 ## DELETE /v1/jobs/:jobId
 
-Marks a job deleted and removes its in-memory result.
+Marks a job deleted and removes source, result, page result, and output objects.
 
 ## Webhooks
 
@@ -95,9 +119,15 @@ When `callbackUrl` is provided, the gateway posts a JSON notification after a jo
 
 Headers:
 
+- `X-Aleph-Tools-Event-Id`: stable event ID.
+- `X-Aleph-Tools-Delivery-Id`: delivery attempt ID.
+- `X-Aleph-Tools-Timestamp`: signing timestamp.
+- `X-Aleph-Tools-Signature`: `sha256=<hex hmac>` over `<timestamp>.<raw body>`.
 - `X-Aleph-OCR-Event-Id`: stable event ID.
 - `X-Aleph-OCR-Delivery-Id`: delivery attempt ID.
 - `X-Aleph-OCR-Timestamp`: signing timestamp.
 - `X-Aleph-OCR-Signature`: `sha256=<hex hmac>` over `<timestamp>.<raw body>`.
 
-Ready payloads include `event`, `eventId`, `jobId`, `job`, `resultUrl`, `metadata`, and `createdAt`. Failed payloads include `event`, `eventId`, `jobId`, `job`, `error`, `metadata`, and `createdAt`. Cancelled payloads include `event`, `eventId`, `jobId`, `job`, `metadata`, and `createdAt`.
+The `X-Aleph-OCR-*` headers are sent for compatibility during the Aleph Tools migration.
+
+Ready payloads include `event`, `eventId`, `jobId`, `job`, `resultUrl`, `metadata`, and `createdAt`. Image conversion ready payloads also include `outputUrl`. Failed payloads include `event`, `eventId`, `jobId`, `job`, `error`, `metadata`, and `createdAt`. Cancelled payloads include `event`, `eventId`, `jobId`, `job`, `metadata`, and `createdAt`.

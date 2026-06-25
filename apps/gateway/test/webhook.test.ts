@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createJob, getJob, requestJobCancel } from '../src/job-store';
 import { processJob } from '../src/index';
 import { fakeEnv, sampleOcrResult } from './helpers';
-import type { OcrDocument } from '@aleph-ocr/shared';
+import type { OcrDocument } from '@aleph-tools/shared';
 
 describe('webhook delivery', () => {
   afterEach(() => {
@@ -34,6 +34,8 @@ describe('webhook delivery', () => {
     const delivery = [...env.deliveries.values()][0];
     expect(delivery.status).toBe('delivered');
     expect(delivery.attempt_count).toBe(1);
+    expect(webhookRequest?.headers.get('X-Aleph-Tools-Event-Id')).toBe(delivery.event_id);
+    expect(webhookRequest?.headers.get('X-Aleph-Tools-Signature')).toMatch(/^sha256=[a-f0-9]{64}$/);
     expect(webhookRequest?.headers.get('X-Aleph-OCR-Event-Id')).toBe(delivery.event_id);
     expect(webhookRequest?.headers.get('X-Aleph-OCR-Signature')).toMatch(/^sha256=[a-f0-9]{64}$/);
 
@@ -71,6 +73,24 @@ describe('webhook delivery', () => {
     expect(delivery.next_attempt_at).toBeTruthy();
   });
 
+  it('sends structured failed webhook payloads', async () => {
+    const env = fakeEnv({ MAX_JOB_ATTEMPTS: '1' });
+    const document: OcrDocument = { type: 'image', filename: 'receipt.png', mimeType: 'image/png', sizeBytes: 3 };
+    const job = await createJob(env, 'example-client-dev', document, new File(['abc'], 'receipt.png', { type: 'image/png' }), {
+      callbackUrl: 'https://app.test/ocr/webhook',
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('engine unavailable', { status: 503 })));
+
+    await processJob(env, job.jobId);
+
+    const delivery = [...env.deliveries.values()][0];
+    expect(JSON.parse(delivery.payload_json)).toMatchObject({
+      event: 'ocr.job.failed',
+      jobId: job.jobId,
+      error: { code: 'JOB_FAILED', jobStatus: 'failed', retryable: false, terminal: true },
+    });
+  });
+
   it('creates cancelled webhook deliveries without rolling back cancellation', async () => {
     const env = fakeEnv();
     const document: OcrDocument = { type: 'image', filename: 'receipt.png', mimeType: 'image/png', sizeBytes: 3 };
@@ -84,6 +104,7 @@ describe('webhook delivery', () => {
     expect(JSON.parse(delivery.payload_json)).toMatchObject({
       event: 'ocr.job.cancelled',
       jobId: job.jobId,
+      error: { code: 'JOB_CANCELLED', jobStatus: 'cancelled', retryable: false, terminal: true },
     });
   });
 });

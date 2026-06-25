@@ -31,6 +31,8 @@ def engine_info() -> dict[str, Any]:
             "image": True,
             "pdf": True,
             "syncImage": True,
+            "imageConvert": True,
+            "imageConvertFormats": ["png", "jpeg", "webp", "avif"],
             "asyncJobs": True,
             "layout": True,
             "tables": False,

@@ -20,8 +20,14 @@ type JobRow = {
   callback_url: string | null;
   callback_metadata_json: string | null;
   idempotency_key: string | null;
+  idempotency_fingerprint: string | null;
   workflow_id: string | null;
   cancelled_at: string | null;
+  tool: string;
+  operation: string | null;
+  tool_options_json: string | null;
+  output_r2_key: string | null;
+  output_json: string | null;
   completed_at: string | null;
   created_at: string;
   updated_at: string;
@@ -72,10 +78,14 @@ export type FakeGatewayEnv = {
   ASSETS: R2Bucket;
   OCR_JOBS: Queue<{ jobId: string }>;
   OCR_WORKFLOW?: Workflow<{ jobId: string }>;
+  TOOLS_WORKFLOW?: Workflow<{ jobId: string }>;
+  ALEPH_TOOLS_API_KEYS: string;
   ALEPH_OCR_API_KEYS: string;
+  ALEPH_TOOLS_ENGINE_URL: string;
   OCR_ENGINE_URL: string;
   WEBHOOK_SIGNING_SECRET: string;
   MAX_JOB_ATTEMPTS?: string;
+  MAX_ACTIVE_JOBS_PER_CLIENT?: string;
   rows: Map<string, JobRow>;
   events: EventRow[];
   deliveries: Map<string, DeliveryRow>;
@@ -102,7 +112,9 @@ export function fakeEnv(overrides: Partial<FakeGatewayEnv> = {}): FakeGatewayEnv
         queueMessages.push(message);
       },
     } as unknown as Queue<{ jobId: string }>,
+    ALEPH_TOOLS_API_KEYS: '{"example-client-dev":"dev-key","other-client":"other-key"}',
     ALEPH_OCR_API_KEYS: '{"example-client-dev":"dev-key","other-client":"other-key"}',
+    ALEPH_TOOLS_ENGINE_URL: 'https://engine.test',
     OCR_ENGINE_URL: 'https://engine.test',
     WEBHOOK_SIGNING_SECRET: 'test-webhook-secret',
     rows,
@@ -138,6 +150,7 @@ export function fakeEnv(overrides: Partial<FakeGatewayEnv> = {}): FakeGatewayEnv
           if (typeof value === 'string') return new TextEncoder().encode(value).buffer;
           return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
         },
+        body: typeof value === 'string' ? new Blob([value]).stream() : new Blob([value]).stream(),
       } as R2ObjectBody;
     },
     async delete(key: string) {
@@ -151,12 +164,13 @@ export function fakeEnv(overrides: Partial<FakeGatewayEnv> = {}): FakeGatewayEnv
       };
     },
   } as unknown as R2Bucket;
-  (env as FakeGatewayEnv & { OCR_WORKFLOW?: Workflow<{ jobId: string }> }).OCR_WORKFLOW = {
+  (env as FakeGatewayEnv & { TOOLS_WORKFLOW?: Workflow<{ jobId: string }> }).TOOLS_WORKFLOW = {
     async create(options: { id?: string; params?: { jobId: string } }) {
       workflowCreates.push(options);
       return {} as WorkflowInstance;
     },
   } as unknown as Workflow<{ jobId: string }>;
+  (env as FakeGatewayEnv & { OCR_WORKFLOW?: Workflow<{ jobId: string }> }).OCR_WORKFLOW = env.TOOLS_WORKFLOW;
   return env;
 }
 
@@ -233,7 +247,11 @@ class FakeStatement {
       callbackUrl,
       callbackMetadataJson,
       idempotencyKey,
+      idempotencyFingerprint,
       workflowId,
+      tool,
+      operation,
+      toolOptionsJson,
       createdAt,
       updatedAt,
       expiresAt,
@@ -256,8 +274,14 @@ class FakeStatement {
       callback_url: callbackUrl as string | null,
       callback_metadata_json: callbackMetadataJson as string | null,
       idempotency_key: idempotencyKey as string | null,
+      idempotency_fingerprint: idempotencyFingerprint as string | null,
       workflow_id: workflowId as string | null,
       cancelled_at: null,
+      tool: (tool as string | null) ?? 'ocr',
+      operation: operation as string | null,
+      tool_options_json: toolOptionsJson as string | null,
+      output_r2_key: null,
+      output_json: null,
       completed_at: null,
       created_at: createdAt as string,
       updated_at: updatedAt as string,
@@ -359,7 +383,13 @@ class FakeStatement {
   }
 
   private setReady() {
-    const [status, progress, stage, currentPage, totalPages, resultR2Key, completedAt, updatedAt, jobId] = this.params;
+    const [status, progress, stage, currentPage, totalPages, resultR2Key, param6, param7, param8, param9, param10] = this.params;
+    const hasOutput = this.params.length === 11;
+    const outputR2Key = hasOutput ? param6 : null;
+    const outputJson = hasOutput ? param7 : null;
+    const completedAt = hasOutput ? param8 : param6;
+    const updatedAt = hasOutput ? param9 : param7;
+    const jobId = hasOutput ? param10 : param8;
     const row = this.env.rows.get(jobId as string)!;
     Object.assign(row, {
       status,
@@ -368,6 +398,7 @@ class FakeStatement {
       current_page: currentPage as number | null,
       total_pages: totalPages as number | null,
       result_r2_key: resultR2Key,
+      ...(hasOutput ? { output_r2_key: outputR2Key as string, output_json: outputJson as string } : {}),
       error: null,
       processing_started_at: null,
       processing_lease_until: null,
@@ -386,6 +417,8 @@ class FakeStatement {
       progress,
       stage,
       result_r2_key: null,
+      output_r2_key: null,
+      output_json: null,
       processing_started_at: null,
       processing_lease_until: null,
       completed_at: completedAt,
@@ -532,6 +565,12 @@ class FakeStatement {
         .filter((row) => row.job_id === jobId && row.client_id === clientId && row.sequence > (afterSequence as number))
         .sort((a, b) => a.sequence - b.sequence)
         .slice(0, 100);
+    }
+    if (sql.includes("status in ('queued', 'processing', 'cancel_requested')")) {
+      const [clientId] = this.params;
+      return [...this.env.rows.values()]
+        .filter((row) => row.client_id === clientId && ['queued', 'processing', 'cancel_requested'].includes(row.status))
+        .map((row) => ({ job_id: row.job_id }));
     }
     if (sql.includes('from ocr_webhook_deliveries')) {
       const [now] = this.params;

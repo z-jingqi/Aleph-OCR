@@ -1,18 +1,21 @@
 import type { Context, Next } from 'hono';
+import type { ApiErrorCode } from '@aleph-tools/shared';
 
 export interface AuthEnv {
+  ALEPH_TOOLS_API_KEYS?: string;
   ALEPH_OCR_API_KEYS?: string;
 }
 
 export type AuthVariables = {
   clientId: string;
+  requestId: string;
 };
 
 export function requireApiKey() {
   return async (c: Context<{ Bindings: AuthEnv; Variables: AuthVariables }>, next: Next) => {
-    const configured = parseApiKeys(c.env.ALEPH_OCR_API_KEYS);
+    const configured = parseApiKeys(c.env.ALEPH_TOOLS_API_KEYS ?? c.env.ALEPH_OCR_API_KEYS);
     if (configured.length === 0) {
-      return c.json({ success: false, error: 'API keys are not configured' }, 500);
+      return authError(c, 'INTERNAL_ERROR', 'API keys are not configured', 500, false);
     }
 
     const header = c.req.header('Authorization') ?? '';
@@ -20,12 +23,37 @@ export function requireApiKey() {
     const token = match?.[1]?.trim();
     const credential = token ? await findCredential(configured, token) : null;
     if (!credential) {
-      return c.json({ success: false, error: 'Unauthorized' }, 401);
+      return authError(c, 'UNAUTHORIZED', 'Unauthorized', 401, false);
     }
 
     c.set('clientId', credential.clientId);
     return next();
   };
+}
+
+function authError(
+  c: Context<{ Bindings: AuthEnv; Variables: AuthVariables }>,
+  code: ApiErrorCode,
+  message: string,
+  httpStatus: 401 | 500,
+  retryable: boolean,
+) {
+  const requestId = c.get('requestId') || `req_${crypto.randomUUID()}`;
+  return c.json(
+    {
+      success: false,
+      error: {
+        code,
+        message,
+        httpStatus,
+        requestId,
+        retryable,
+        terminal: false,
+      },
+      requestId,
+    },
+    httpStatus,
+  );
 }
 
 export function parseApiKeys(raw: string | undefined): Array<{ clientId: string; key: string }> {
