@@ -32,8 +32,14 @@ Limits:
 Creates an OCR job. Multipart form field:
 
 - `file`: supported image or PDF.
+- `callbackUrl`: optional HTTPS webhook URL for `ready`, `failed`, and `cancelled` notifications.
+- `metadata`: optional JSON object string echoed back in webhook payloads.
 
-Images and PDFs are accepted. PDFs are always async.
+Optional header:
+
+- `Idempotency-Key`: scoped to the authenticated client. Reusing the same key returns the original job instead of creating another job.
+
+Images and PDFs are accepted. PDFs are always async and are processed page by page. The production target is 100 pages or fewer.
 
 ## GET /v1/jobs/:jobId
 
@@ -41,16 +47,57 @@ Returns job metadata and status. Status values:
 
 - `queued`
 - `processing`
+- `cancel_requested`
+- `cancelled`
 - `ready`
 - `failed`
 - `deleted`
 
+The returned job also includes progress snapshot fields:
+
+- `progress`: integer from 0 to 100.
+- `stage`: coarse processing stage, such as `queued`, `processing`, `ocr`, `ready`, or `failed`.
+- `currentPage` and `totalPages`: present when known.
+- `expiresAt`: when source/result objects are eligible for cleanup.
+- `completedAt`: present for terminal states.
+
 Only the client that created a job can read, delete, or fetch its result.
+
+## GET /v1/jobs/:jobId/events
+
+Streams job snapshots and events as `text/event-stream`. The route uses the same API-key ownership rules as job reads.
+
+The stream sends:
+
+- `job.snapshot`: current persisted job state when the connection opens.
+- `job.created`, `job.status`, `job.progress`, `job.page.ready`, `job.ready`, `job.failed`, `job.cancel_requested`, `job.cancelled`, or `job.deleted`: stored job events.
+- `ping`: heartbeat events while the connection is open.
+
+Clients can reconnect with `Last-Event-ID` to receive events after the last seen sequence number. If the job is already terminal, clients should still call `GET /v1/jobs/:jobId` and `GET /v1/jobs/:jobId/result` as the source of truth.
 
 ## GET /v1/jobs/:jobId/result
 
 Returns the complete OCR result once ready.
 
+If the job is `queued`, `processing`, or `cancel_requested`, this returns `409`. Cancelled, failed, deleted, and missing result states return an error instead of a partial result.
+
+## POST /v1/jobs/:jobId/cancel
+
+Requests cancellation. Queued jobs become `cancelled` immediately. Processing jobs first become `cancel_requested`; the workflow checks this state between image/page steps and then marks the job `cancelled`. A cancelled job never transitions to `ready`.
+
 ## DELETE /v1/jobs/:jobId
 
 Marks a job deleted and removes its in-memory result.
+
+## Webhooks
+
+When `callbackUrl` is provided, the gateway posts a JSON notification after a job becomes `ready`, `failed`, or `cancelled`.
+
+Headers:
+
+- `X-Aleph-OCR-Event-Id`: stable event ID.
+- `X-Aleph-OCR-Delivery-Id`: delivery attempt ID.
+- `X-Aleph-OCR-Timestamp`: signing timestamp.
+- `X-Aleph-OCR-Signature`: `sha256=<hex hmac>` over `<timestamp>.<raw body>`.
+
+Ready payloads include `event`, `eventId`, `jobId`, `job`, `resultUrl`, `metadata`, and `createdAt`. Failed payloads include `event`, `eventId`, `jobId`, `job`, `error`, `metadata`, and `createdAt`. Cancelled payloads include `event`, `eventId`, `jobId`, `job`, `metadata`, and `createdAt`.

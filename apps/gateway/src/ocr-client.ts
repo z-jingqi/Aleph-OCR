@@ -34,6 +34,25 @@ export async function ocrPdf(env: OcrClientEnv, file: File): Promise<OcrResult> 
   return OcrResultSchema.parse(data);
 }
 
+export async function getPdfInfo(env: OcrClientEnv, file: File): Promise<{ pageCount: number }> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  const response = await engineFetch(env, '/internal/ocr/pdf-info', { method: 'POST', body: form });
+  const data = (await response.json()) as { pageCount?: unknown };
+  if (!Number.isInteger(data.pageCount) || Number(data.pageCount) < 0) {
+    throw new OcrEngineError('OCR engine returned invalid PDF metadata', 500);
+  }
+  return { pageCount: Number(data.pageCount) };
+}
+
+export async function ocrPdfPage(env: OcrClientEnv, file: File, pageIndex: number): Promise<OcrResult> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  const response = await engineFetch(env, `/internal/ocr/pdf-page?page_index=${pageIndex}`, { method: 'POST', body: form });
+  const data = await response.json();
+  return OcrResultSchema.parse(data);
+}
+
 async function engineFetch(env: OcrClientEnv, path: string, init: RequestInit): Promise<Response> {
   const baseUrl = env.OCR_ENGINE_URL ?? 'http://127.0.0.1:8090';
   const headers = new Headers(init.headers);

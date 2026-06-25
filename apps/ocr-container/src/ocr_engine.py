@@ -80,6 +80,19 @@ def ocr_pdf_bytes(content: bytes, filename: str, mime_type: str) -> dict[str, An
     return build_result(filename, mime_type, "pdf", pages)
 
 
+def pdf_info_bytes(content: bytes, filename: str) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        pdf_path = Path(tmpdir) / safe_filename(filename, "document.pdf")
+        pdf_path.write_bytes(content)
+        doc = fitz.open(pdf_path)
+        try:
+            if doc.page_count > MAX_PDF_PAGES:
+                raise ValueError(f"PDF has {doc.page_count} pages; max supported pages is {MAX_PDF_PAGES}")
+            return {"pageCount": doc.page_count}
+        finally:
+            doc.close()
+
+
 def ocr_pdf_page_bytes(content: bytes, filename: str, page_index: int) -> dict[str, Any]:
     with tempfile.TemporaryDirectory() as tmpdir:
         pdf_path = Path(tmpdir) / safe_filename(filename, "document.pdf")
@@ -134,18 +147,24 @@ def build_result(filename: str, mime_type: str, document_type: str, pages: list[
 def normalize_blocks(raw: Any) -> list[dict[str, Any]]:
     blocks: list[dict[str, Any]] = []
     for item in flatten_ocr_items(raw):
-        parsed = parse_ocr_item(item)
-        if parsed:
-            blocks.append(parsed)
+        if isinstance(item, dict):
+            blocks.extend(parse_paddle_v3_result(item))
+        else:
+            parsed = parse_ocr_item(item)
+            if parsed:
+                blocks.append(parsed)
     return blocks
 
 
 def flatten_ocr_items(raw: Any):
     if raw is None:
         return
+    if isinstance(raw, dict):
+        yield raw
+        return
     if isinstance(raw, list):
         for item in raw:
-            if looks_like_ocr_line(item):
+            if isinstance(item, dict) or looks_like_ocr_line(item):
                 yield item
             else:
                 yield from flatten_ocr_items(item)
@@ -165,8 +184,33 @@ def parse_ocr_item(item: Any) -> dict[str, Any] | None:
         return None
 
 
+def parse_paddle_v3_result(item: dict[str, Any]) -> list[dict[str, Any]]:
+    texts = item.get("rec_texts")
+    if not isinstance(texts, list):
+        return []
+    scores = item.get("rec_scores") if isinstance(item.get("rec_scores"), list) else []
+    polygons = item.get("rec_polys") if isinstance(item.get("rec_polys"), list) else item.get("dt_polys")
+    polygons = polygons if isinstance(polygons, list) else []
+
+    blocks: list[dict[str, Any]] = []
+    for index, text in enumerate(texts):
+        if not isinstance(text, str) or not text:
+            continue
+        confidence = None
+        if index < len(scores) and scores[index] is not None:
+            try:
+                confidence = float(scores[index])
+            except (TypeError, ValueError):
+                confidence = None
+        bbox = flatten_bbox(polygons[index]) if index < len(polygons) else []
+        blocks.append({"text": text, "bbox": bbox, "confidence": confidence})
+    return blocks
+
+
 def flatten_bbox(bbox: Any) -> list[float]:
     values: list[float] = []
+    if hasattr(bbox, "tolist"):
+        bbox = bbox.tolist()
     if isinstance(bbox, (list, tuple)):
         for point in bbox:
             if isinstance(point, (list, tuple)):

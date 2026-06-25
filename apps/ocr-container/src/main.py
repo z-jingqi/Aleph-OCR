@@ -5,7 +5,7 @@ import os
 from fastapi import FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
-from .ocr_engine import engine_info, ocr_image_bytes, ocr_pdf_bytes, ocr_pdf_page_bytes
+from .ocr_engine import engine_info, ocr_image_bytes, ocr_pdf_bytes, ocr_pdf_page_bytes, pdf_info_bytes
 
 app = FastAPI(title="Aleph-OCR Engine", version="0.1.0")
 
@@ -37,6 +37,18 @@ async def ocr_pdf(file: UploadFile = File(...), x_aleph_ocr_internal_token: str 
     content = await file.read()
     try:
         return JSONResponse(ocr_pdf_bytes(content, file.filename or "document.pdf", file.content_type))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/internal/ocr/pdf-info")
+async def pdf_info(file: UploadFile = File(...), x_aleph_ocr_internal_token: str | None = Header(default=None)):
+    check_internal_token(x_aleph_ocr_internal_token)
+    if file.content_type != "application/pdf":
+        raise HTTPException(status_code=400, detail=f"Unsupported PDF type: {file.content_type}")
+    content = await file.read()
+    try:
+        return JSONResponse(pdf_info_bytes(content, file.filename or "document.pdf"))
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 

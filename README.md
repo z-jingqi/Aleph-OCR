@@ -77,10 +77,12 @@ Required GitHub environment secrets:
 - `ALEPH_OCR_D1_DATABASE_ID_PROD`
 - `ALEPH_OCR_ENGINE_URL_DEV`
 - `ALEPH_OCR_ENGINE_URL_PROD`
+- `ALEPH_OCR_CONTAINER_IMAGE`, when deploying the OCR engine through Cloudflare Containers
 
 Required Worker secrets:
 
 - `ALEPH_OCR_API_KEYS`, for example `{"example-client-dev":"...","example-client-prod":"..."}`
+- `WEBHOOK_SIGNING_SECRET`, used to sign async job webhook deliveries
 - optional `OCR_ENGINE_TOKEN`, if the engine requires the internal token
 
 Default custom domains:
@@ -89,6 +91,8 @@ Default custom domains:
 - prod: `ocr.aleph-cat.com`
 
 OCR source files and JSON results expire after 7 days by default. A scheduled Worker cleanup marks expired jobs deleted and removes their R2 objects.
+
+Production async jobs are orchestrated through Cloudflare Workflows. Queue messages remain small references only, and PDF OCR runs page by page so a single queue invocation does not need to hold a long-running 100-page job open. Container disk is treated as ephemeral; source files, page results, final results, progress snapshots, and events are persisted to R2/D1.
 
 ## Example
 
@@ -101,6 +105,8 @@ For PDFs, create an async job:
 ```bash
 curl -X POST http://127.0.0.1:8787/v1/jobs   -H 'Authorization: Bearer dev-key'   -F 'file=@sample.pdf'
 ```
+
+Async jobs can include `callbackUrl` and `metadata` multipart fields for webhook notifications. Use `Idempotency-Key` when retrying a create request. Control panels can subscribe to `GET /v1/jobs/:jobId/events` for SSE progress events, and callers can cancel work with `POST /v1/jobs/:jobId/cancel`.
 
 ## Scripts
 

@@ -19,9 +19,28 @@
     }
   ],
   "r2_buckets": [{ "binding": "ASSETS", "bucket_name": "__R2_BUCKET__" }],
+  "workflows": [
+    {
+      "binding": "OCR_WORKFLOW",
+      "name": "aleph-ocr-job-__ENV__",
+      "class_name": "OcrJobWorkflow"
+    }
+  ],
   "queues": {
     "producers": [{ "binding": "OCR_JOBS", "queue": "__QUEUE__" }],
     "consumers": [{ "queue": "__QUEUE__", "max_batch_size": 5, "max_batch_timeout": 10 }]
+  },
+  "containers": {
+    "app": [
+      {
+        "name": "aleph-ocr-engine-__ENV__",
+        "instances": 1,
+        "configuration": {
+          "image": "__OCR_CONTAINER_IMAGE__",
+          "secrets": [{ "name": "OCR_ENGINE_TOKEN", "type": "env", "secret": "OCR_ENGINE_TOKEN" }]
+        }
+      }
+    ]
   },
   "triggers": { "crons": ["17 3 * * *"] },
   "routes": [{ "pattern": "__OCR_DOMAIN__", "custom_domain": true }],
