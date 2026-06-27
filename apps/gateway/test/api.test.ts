@@ -1,6 +1,34 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import handler, { processJob } from '../src/index';
-import { fakeEnv, fixtureFile } from './helpers';
+import { fakeEnv, fixtureFile, sampleOcrResult } from './helpers';
+
+const engineInfo = {
+  engine: 'paddleocr',
+  engineVersion: '3.x',
+  ocrModes: ['fast', 'balanced', 'accurate'],
+  defaultOcrMode: 'balanced',
+  modeConfigs: {
+    fast: { detector: 'mobile', pdfRenderDpi: 160 },
+    balanced: { detector: 'standard', pdfRenderDpi: 200 },
+    accurate: { detector: 'server', pdfRenderDpi: 240 },
+  },
+  capabilities: {
+    image: true,
+    pdf: true,
+    syncImage: true,
+    imageConvert: true,
+    imageConvertFormats: ['png', 'jpeg', 'webp', 'avif'],
+    asyncJobs: true,
+    layout: true,
+    tables: false,
+  },
+  limits: {
+    maxSyncImageSizeBytes: 10 * 1024 * 1024,
+    maxPdfPages: 100,
+    pdfBatchSize: 1,
+    pdfRenderDpi: 200,
+  },
+};
 
 describe('gateway API', () => {
   afterEach(() => {
@@ -16,6 +44,32 @@ describe('gateway API', () => {
     await expect(response.json()).resolves.toMatchObject({
       success: false,
       error: { code: 'UNAUTHORIZED', httpStatus: 401, retryable: false },
+    });
+  });
+
+  it('returns engine OCR modes and mode config', async () => {
+    const env = fakeEnv();
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json(engineInfo)));
+
+    const response = await handler.fetch(
+      new Request('https://ocr.test/v1/engines', {
+        headers: { Authorization: 'Bearer dev-key' },
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      success: true,
+      data: {
+        modes: ['fast', 'balanced', 'accurate'],
+        defaultMode: 'balanced',
+        modeConfig: { accurate: { pdfRenderDpi: 240 } },
+        ocrModes: ['fast', 'balanced', 'accurate'],
+        defaultOcrMode: 'balanced',
+        modeConfigs: { accurate: { pdfRenderDpi: 240 } },
+      },
     });
   });
 
@@ -39,6 +93,56 @@ describe('gateway API', () => {
     await expect(response.json()).resolves.toMatchObject({
       success: false,
       error: { code: 'ENGINE_UNAVAILABLE', message: 'engine down', retryable: true },
+    });
+  });
+
+  it('passes OCR mode to sync OCR requests', async () => {
+    const env = fakeEnv();
+    const fetchMock = vi.fn(async (_input: unknown) => Response.json(sampleOcrResult()));
+    vi.stubGlobal('fetch', fetchMock);
+    const form = new FormData();
+    form.append('file', await fixtureFile('images/receipt.png', 'image/png'));
+    form.append('ocrMode', 'accurate');
+
+    const response = await handler.fetch(
+      new Request('https://ocr.test/v1/ocr/sync', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key' },
+        body: form,
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+
+    expect(response.status).toBe(200);
+    expect(requestUrl(fetchMock.mock.calls[0]![0]).pathname).toBe('/internal/ocr/image');
+    expect(requestUrl(fetchMock.mock.calls[0]![0]).searchParams.get('mode')).toBe('accurate');
+    await expect(response.json()).resolves.toMatchObject({
+      success: true,
+      data: { metadata: { ocrMode: 'accurate', requestedOcrMode: 'accurate', fallbackUsed: false } },
+    });
+  });
+
+  it('rejects invalid sync OCR modes with a structured validation error', async () => {
+    const env = fakeEnv();
+    const form = new FormData();
+    form.append('file', await fixtureFile('images/receipt.png', 'image/png'));
+    form.append('ocrMode', 'precise');
+
+    const response = await handler.fetch(
+      new Request('https://ocr.test/v1/ocr/sync', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key' },
+        body: form,
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'ocrMode must be one of fast, balanced, accurate', retryable: false },
     });
   });
 
@@ -130,6 +234,55 @@ describe('gateway API', () => {
     expect(env.workflowCreates).toHaveLength(1);
   });
 
+  it('creates async OCR jobs with mode and forwards it during processing', async () => {
+    const env = fakeEnv();
+    const form = new FormData();
+    form.append('file', await fixtureFile('images/receipt.png', 'image/png'));
+    form.append('ocrMode', 'fast');
+
+    const createResponse = await handler.fetch(
+      new Request('https://ocr.test/v1/jobs', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key' },
+        body: form,
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    const createBody = (await createResponse.json()) as { data: { jobId: string } };
+    expect(env.rows.get(createBody.data.jobId)?.tool_options_json).toBe('{"ocrMode":"fast"}');
+
+    const fetchMock = vi.fn(async (_input: unknown) => Response.json(sampleOcrResult()));
+    vi.stubGlobal('fetch', fetchMock);
+    await processJob(env, createBody.data.jobId);
+
+    expect(requestUrl(fetchMock.mock.calls[0]![0]).pathname).toBe('/internal/ocr/image');
+    expect(requestUrl(fetchMock.mock.calls[0]![0]).searchParams.get('mode')).toBe('fast');
+  });
+
+  it('rejects invalid async OCR modes with a structured validation error', async () => {
+    const env = fakeEnv();
+    const form = new FormData();
+    form.append('file', await fixtureFile('images/receipt.png', 'image/png'));
+    form.append('ocrMode', 'precise');
+
+    const response = await handler.fetch(
+      new Request('https://ocr.test/v1/jobs', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key' },
+        body: form,
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'ocrMode must be one of fast, balanced, accurate', retryable: false },
+    });
+  });
+
   it('returns idempotency conflict when the same key is reused with different input', async () => {
     const env = fakeEnv();
     const firstForm = new FormData();
@@ -153,6 +306,42 @@ describe('gateway API', () => {
       new Request('https://tools.test/v1/tools/image/convert', {
         method: 'POST',
         headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'convert-conflict' },
+        body: secondForm,
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+
+    expect(conflictResponse.status).toBe(409);
+    await expect(conflictResponse.json()).resolves.toMatchObject({
+      success: false,
+      error: { code: 'IDEMPOTENCY_CONFLICT', retryable: false },
+    });
+  });
+
+  it('returns OCR idempotency conflict when the same key is reused with a different mode', async () => {
+    const env = fakeEnv();
+    const firstForm = new FormData();
+    firstForm.append('file', await fixtureFile('images/receipt.png', 'image/png'));
+    firstForm.append('ocrMode', 'fast');
+    const firstResponse = await handler.fetch(
+      new Request('https://ocr.test/v1/jobs', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'ocr-mode-conflict' },
+        body: firstForm,
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(firstResponse.status).toBe(202);
+
+    const secondForm = new FormData();
+    secondForm.append('file', await fixtureFile('images/receipt.png', 'image/png'));
+    secondForm.append('ocrMode', 'accurate');
+    const conflictResponse = await handler.fetch(
+      new Request('https://ocr.test/v1/jobs', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'ocr-mode-conflict' },
         body: secondForm,
       }),
       env,
@@ -428,6 +617,94 @@ describe('gateway API', () => {
     });
   });
 
+  it('processes async PDFs through raw batch OCR and aggregates page fallback quality', async () => {
+    const env = fakeEnv();
+    const form = new FormData();
+    form.append('file', await fixtureFile('pdfs/mixed-two-page.pdf', 'application/pdf'));
+    form.append('ocrMode', 'balanced');
+    const createResponse = await handler.fetch(
+      new Request('https://ocr.test/v1/jobs', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key' },
+        body: form,
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    const createBody = (await createResponse.json()) as { data: { jobId: string } };
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestUrl(input);
+      expect(init?.body).toBeInstanceOf(ReadableStream);
+      expect(new Headers(init?.headers).get('Content-Type')).toBe('application/pdf');
+      if (url.pathname === '/internal/ocr/pdf-info') return Response.json({ pageCount: 2 });
+      if (url.pathname === '/internal/ocr/pdf-batch') {
+        expect(url.searchParams.get('start_page')).toBe('0');
+        expect(url.searchParams.get('page_count')).toBe('2');
+        expect(url.searchParams.get('mode')).toBe('balanced');
+        return Response.json(samplePdfBatchResult());
+      }
+      throw new Error(`unexpected engine endpoint: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await processJob(env, createBody.data.jobId);
+
+    const paths = fetchMock.mock.calls.map((call) => requestUrl(call[0]).pathname);
+    expect(paths).toEqual(['/internal/ocr/pdf-info', '/internal/ocr/pdf-batch']);
+    expect(paths).not.toContain('/internal/ocr/pdf-page');
+
+    const resultResponse = await handler.fetch(
+      new Request(`https://ocr.test/v1/jobs/${createBody.data.jobId}/result`, {
+        headers: { Authorization: 'Bearer dev-key' },
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(resultResponse.status).toBe(200);
+    const resultBody = (await resultResponse.json()) as { data: { fallbackUsed: boolean; quality: { fallbackReasons: string[]; lowQualityPageCount: number }; timingsMs: Record<string, number> } };
+    expect(resultBody.data.fallbackUsed).toBe(true);
+    expect(resultBody.data.quality.fallbackReasons).toEqual(expect.arrayContaining(['short_text', 'low_confidence']));
+    expect(resultBody.data.quality.lowQualityPageCount).toBe(1);
+    expect(resultBody.data.timingsMs.requestedTotal).toBe(21);
+    expect(resultBody.data.timingsMs.fallbackTotal).toBe(8);
+  });
+
+  it('stops async PDF processing between batches when cancellation is requested', async () => {
+    const env = fakeEnv();
+    const form = new FormData();
+    form.append('file', await fixtureFile('pdfs/mixed-two-page.pdf', 'application/pdf'));
+    const createResponse = await handler.fetch(
+      new Request('https://ocr.test/v1/jobs', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key' },
+        body: form,
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    const createBody = (await createResponse.json()) as { data: { jobId: string } };
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url.pathname === '/internal/ocr/pdf-info') return Response.json({ pageCount: 6 });
+      if (url.pathname === '/internal/ocr/pdf-batch') {
+        expect(url.searchParams.get('start_page')).toBe('0');
+        const row = env.rows.get(createBody.data.jobId)!;
+        row.status = 'cancel_requested';
+        row.stage = 'cancel_requested';
+        return Response.json(samplePdfBatchResult(0, 5));
+      }
+      throw new Error(`unexpected engine endpoint: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await processJob(env, createBody.data.jobId);
+
+    expect(fetchMock.mock.calls.map((call) => requestUrl(call[0]).pathname)).toEqual(['/internal/ocr/pdf-info', '/internal/ocr/pdf-batch']);
+    expect(env.rows.get(createBody.data.jobId)).toMatchObject({ status: 'cancelled', stage: 'cancelled', result_r2_key: null });
+  });
+
   it('returns stable result errors for terminal and missing-result states', async () => {
     const env = fakeEnv();
     const form = new FormData();
@@ -546,3 +823,52 @@ describe('gateway API', () => {
     expect(sseResponse.status).toBe(404);
   });
 });
+
+function requestUrl(input: unknown): URL {
+  if (input instanceof Request) return new URL(input.url);
+  return new URL(String(input));
+}
+
+function samplePdfBatchResult(startPage = 0, pageCount = 2) {
+  const pages = Array.from({ length: pageCount }, (_, offset) => {
+    const pageIndex = startPage + offset;
+    return {
+      pageIndex,
+      width: 100,
+      height: 100,
+      text: `PDF page ${pageIndex + 1} recognized text with enough words`,
+      blocks: [{ text: `PDF page ${pageIndex + 1} recognized text with enough words`, confidence: 0.95 }],
+      tables: [],
+      confidence: 0.95,
+      ocrMode: pageIndex === 0 ? 'accurate' : 'balanced',
+      requestedOcrMode: 'balanced',
+      fallbackUsed: pageIndex === 0,
+      quality:
+        pageIndex === 0
+          ? {
+              lowQuality: false,
+              reasons: [],
+              fallbackReasons: ['short_text', 'low_confidence'],
+              initial: { lowQuality: true, reasons: ['short_text', 'low_confidence'], fallbackReasons: ['short_text', 'low_confidence'] },
+            }
+          : { lowQuality: false, reasons: [], fallbackReasons: [] },
+      timingsMs:
+        pageIndex === 0
+          ? { decode: 1, preprocess: 2, modelInit: 3, ocr: 10, normalize: 1, total: 20, requestedTotal: 12, fallbackTotal: 8 }
+          : { decode: 1, preprocess: 2, modelInit: 0, ocr: 5, normalize: 1, total: 9, requestedTotal: 9, fallbackTotal: 0 },
+    };
+  });
+  return {
+    engine: 'mock',
+    engineVersion: '1',
+    document: { type: 'pdf', filename: 'mixed-two-page.pdf', mimeType: 'application/pdf', sizeBytes: 3 },
+    pages,
+    plainText: pages.map((page) => page.text).join('\n\n'),
+    markdown: pages.map((page) => `## Page ${page.pageIndex + 1}\n\n${page.text}`).join('\n\n'),
+    ocrMode: pages.some((page) => page.fallbackUsed) ? 'accurate' : 'balanced',
+    requestedOcrMode: 'balanced',
+    fallbackUsed: pages.some((page) => page.fallbackUsed),
+    quality: { lowQuality: false, reasons: [], fallbackReasons: ['short_text', 'low_confidence'] },
+    timingsMs: { requestedTotal: 21, fallbackTotal: 8, total: 29 },
+  };
+}

@@ -44,6 +44,37 @@ describe('job lifecycle processing', () => {
     expect(env.events.at(-1)?.type).toBe('job.failed');
   });
 
+  it('does not emit terminal failed state before retry attempts are exhausted', async () => {
+    const env = fakeEnv();
+    const document: OcrDocument = { type: 'image', filename: 'receipt.png', mimeType: 'image/png', sizeBytes: 3 };
+    const job = await createJob(env, 'example-client-dev', document, new File(['abc'], 'receipt.png', { type: 'image/png' }));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('engine unavailable', { status: 503 }))
+      .mockResolvedValueOnce(Response.json(sampleOcrResult(document)));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(processJob(env, job.jobId)).rejects.toThrow('engine unavailable');
+
+    expect(await getJob(env, 'example-client-dev', job.jobId)).toMatchObject({
+      status: 'queued',
+      stage: 'queued',
+      error: 'engine unavailable',
+      attemptCount: 1,
+    });
+    expect(env.events.map((event) => event.type)).not.toContain('job.failed');
+    expect(env.deliveries.size).toBe(0);
+
+    await processJob(env, job.jobId);
+
+    expect(await getJob(env, 'example-client-dev', job.jobId)).toMatchObject({
+      status: 'ready',
+      progress: 100,
+      attemptCount: 2,
+    });
+    expect(env.events.map((event) => event.type)).not.toContain('job.failed');
+  });
+
   it('keeps ready result when webhook delivery fails', async () => {
     const env = fakeEnv();
     const document: OcrDocument = { type: 'image', filename: 'receipt.png', mimeType: 'image/png', sizeBytes: 3 };
@@ -64,24 +95,19 @@ describe('job lifecycle processing', () => {
     expect(delivery.last_error).toBe('Webhook returned 500');
   });
 
-  it('processes PDF jobs page by page and merges final result', async () => {
+  it('processes PDF jobs by batch and merges final result', async () => {
     const env = fakeEnv();
     const document: OcrDocument = { type: 'pdf', filename: 'mixed.pdf', mimeType: 'application/pdf', sizeBytes: 3 };
     const job = await createJob(env, 'example-client-dev', document, new File(['pdf'], 'mixed.pdf', { type: 'application/pdf' }));
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(Response.json({ pageCount: 2 }))
-      .mockResolvedValueOnce(Response.json(sampleOcrResult({ ...document, filename: 'mixed.pdf#page=1' })))
-      .mockResolvedValueOnce(Response.json({
-        ...sampleOcrResult({ ...document, filename: 'mixed.pdf#page=2' }),
-        pages: [{ pageIndex: 1, width: 100, height: 100, text: 'Second page', blocks: [], tables: [], confidence: 0.9 }],
-        plainText: 'Second page',
-        markdown: 'Second page',
-      }));
+      .mockResolvedValueOnce(Response.json(samplePdfBatchResult(document, 0, 2)));
     vi.stubGlobal('fetch', fetchMock);
 
     await processJob(env, job.jobId);
 
+    expect(fetchMock.mock.calls.map((call) => requestUrl(call[0]).pathname)).toEqual(['/internal/ocr/pdf-info', '/internal/ocr/pdf-batch']);
     const ready = await getJob(env, 'example-client-dev', job.jobId);
     expect(ready).toMatchObject({ status: 'ready', progress: 100, currentPage: 2, totalPages: 2 });
     expect(env.pages.map((page) => page.status)).toEqual(['ready', 'ready']);
@@ -132,7 +158,7 @@ describe('job lifecycle processing', () => {
       .mockResolvedValueOnce(Response.json({ pageCount: 2 }))
       .mockImplementationOnce(async () => {
         await requestJobCancel(env, 'example-client-dev', job.jobId);
-        return Response.json(sampleOcrResult({ ...document, filename: 'mixed.pdf#page=1' }));
+        return Response.json(samplePdfBatchResult(document, 0, 2));
       });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -143,3 +169,41 @@ describe('job lifecycle processing', () => {
     expect([...env.objects.keys()].some((key) => key.includes('/results/'))).toBe(false);
   });
 });
+
+function requestUrl(input: unknown): URL {
+  if (input instanceof Request) return new URL(input.url);
+  return new URL(String(input));
+}
+
+function samplePdfBatchResult(document: OcrDocument, startPage: number, pageCount: number) {
+  const pages = Array.from({ length: pageCount }, (_, offset) => {
+    const pageIndex = startPage + offset;
+    return {
+      pageIndex,
+      width: 100,
+      height: 100,
+      text: `Page ${pageIndex + 1}`,
+      blocks: [{ text: `Page ${pageIndex + 1}`, confidence: 0.9 }],
+      tables: [],
+      confidence: 0.9,
+      ocrMode: 'balanced',
+      requestedOcrMode: 'balanced',
+      fallbackUsed: false,
+      quality: { lowQuality: false, reasons: [], fallbackReasons: [] },
+      timingsMs: { total: 10, requestedTotal: 10, fallbackTotal: 0 },
+    };
+  });
+  return {
+    engine: 'mock',
+    engineVersion: '1',
+    document,
+    pages,
+    plainText: pages.map((page) => page.text).join('\n\n'),
+    markdown: pages.map((page) => `## Page ${page.pageIndex + 1}\n\n${page.text}`).join('\n\n'),
+    ocrMode: 'balanced',
+    requestedOcrMode: 'balanced',
+    fallbackUsed: false,
+    quality: { lowQuality: false, reasons: [], fallbackReasons: [] },
+    timingsMs: { total: 10 * pageCount, requestedTotal: 10 * pageCount, fallbackTotal: 0 },
+  };
+}

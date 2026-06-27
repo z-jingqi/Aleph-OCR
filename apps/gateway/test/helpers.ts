@@ -220,6 +220,7 @@ class FakeStatement {
     else if (sql.includes('update ocr_jobs') && sql.includes('workflow_id = ?')) changes = this.attachWorkflow();
     else if (sql.includes('update ocr_jobs') && sql.includes('cancelled_at = ?')) changes = this.requestCancel();
     else if (sql.includes('update ocr_jobs') && sql.includes('coalesce(cancelled_at')) changes = this.completeCancel();
+    else if (sql.includes('update ocr_jobs') && sql.includes('completed_at = null') && sql.includes('where job_id = ? and status = ?')) changes = this.requeueJobForRetry();
     else if (sql.includes('update ocr_jobs') && sql.includes('where job_id = ? and status = ?')) changes = this.resetExpiredJob();
     else if (sql.includes('update ocr_jobs') && sql.includes('coalesce')) changes = this.updateProgress();
     else if (sql.includes('update ocr_jobs') && sql.includes('result_r2_key = ?')) changes = this.setReady();
@@ -327,6 +328,23 @@ class FakeStatement {
       error,
       processing_started_at: null,
       processing_lease_until: null,
+      updated_at: updatedAt,
+    });
+    return 1;
+  }
+
+  private requeueJobForRetry() {
+    const [status, progress, stage, error, updatedAt, jobId, expectedStatus] = this.params;
+    const row = this.env.rows.get(jobId as string);
+    if (!row || row.status !== expectedStatus) return 0;
+    Object.assign(row, {
+      status,
+      progress,
+      stage,
+      error,
+      processing_started_at: null,
+      processing_lease_until: null,
+      completed_at: null,
       updated_at: updatedAt,
     });
     return 1;

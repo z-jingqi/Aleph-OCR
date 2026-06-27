@@ -7,13 +7,17 @@ import {
   ImageConvertOptionsSchema,
   MAX_PDF_PAGES,
   MAX_SYNC_IMAGE_SIZE_BYTES,
+  PDF_BATCH_SIZE,
+  OcrModeSchema,
   inferDocumentType,
   isSupportedImageMime,
   type ApiErrorCode,
   type ImageConvertOptions,
   type JobStatus,
+  type OcrMode,
   type OcrPage,
   type OcrDocument,
+  type OcrQuality,
   type OcrResult,
 } from '@aleph-tools/shared';
 import { requireApiKey, type AuthEnv, type AuthVariables } from './auth';
@@ -42,6 +46,7 @@ import {
   markWebhookDelivered,
   markWebhookFailed,
   publicJob,
+  requeueJobForRetry,
   requireStorage,
   resetExpiredProcessingJobs,
   setJobResult,
@@ -50,11 +55,11 @@ import {
   type StoredJob,
   type WebhookDelivery,
 } from './job-store';
-import { convertImage, getEngineInfo, getPdfInfo, OcrEngineError, ocrImage, ocrPdfPage, type ToolsClientEnv } from './ocr-client';
+import { convertImage, getEngineInfo, getPdfInfoFromObject, OcrEngineError, ocrImage, ocrPdfBatchFromObject, type ToolsClientEnv } from './ocr-client';
 
 export class ToolsEngineContainer extends Container {
   defaultPort = 8090;
-  sleepAfter = '10m';
+  sleepAfter = '30m';
 }
 
 interface Env extends AuthEnv, ToolsClientEnv {
@@ -116,7 +121,7 @@ app.post('/v1/ocr/sync', async (c) => {
   const parsed = await readUploadedFile(c.req.raw);
   if (!parsed.ok) return parsedUploadError(c, parsed);
 
-  const { file } = parsed;
+  const { file, ocrMode } = parsed;
   if (!isSupportedImageMime(file.type)) {
     return jsonError(c, 'UNSUPPORTED_MEDIA_TYPE', 'Sync OCR only supports image files', 400, { retryable: false });
   }
@@ -125,7 +130,7 @@ app.post('/v1/ocr/sync', async (c) => {
   }
 
   try {
-    const result = await ocrImage(c.env, file);
+    const result = withRequestedOcrModeMetadata(await ocrImage(c.env, file, ocrMode), ocrMode);
     return jsonSuccess(c, result);
   } catch (error) {
     return engineErrorResponse(c, error);
@@ -174,7 +179,7 @@ app.post('/v1/jobs', async (c) => {
   const parsed = await readUploadedFile(c.req.raw);
   if (!parsed.ok) return parsedUploadError(c, parsed);
 
-  const { file, callbackUrl, metadata } = parsed;
+  const { file, callbackUrl, metadata, ocrMode } = parsed;
   const documentType = inferDocumentType(file.type);
   if (!documentType) {
     return jsonError(c, 'UNSUPPORTED_MEDIA_TYPE', `Unsupported file type: ${file.type || 'unknown'}`, 400, { retryable: false });
@@ -188,7 +193,8 @@ app.post('/v1/jobs', async (c) => {
   };
 
   try {
-    const fingerprint = await buildIdempotencyFingerprint(file, 'ocr', 'ocr', {});
+    const ocrOptions = { ocrMode };
+    const fingerprint = await buildIdempotencyFingerprint(file, 'ocr', 'ocr', ocrOptions);
     if (idempotencyKey) {
       const existing = await getJobByIdempotencyKey(c.env, c.get('clientId'), idempotencyKey);
       if (existing) {
@@ -208,6 +214,7 @@ app.post('/v1/jobs', async (c) => {
       ...(metadata ? { callbackMetadata: metadata } : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
       idempotencyFingerprint: fingerprint,
+      toolOptions: ocrOptions,
       workflowId,
     });
     await startToolWorkflow(c.env, job.jobId, job.workflowId ?? workflowId);
@@ -430,40 +437,46 @@ export async function runToolWorkflow(env: StorageEnv, jobId: string, step: Work
     await assertNotCancelled(env, job);
     const claimedJob = job;
     job = await step.do(`read source ${claimedJob.jobId}`, async () => updateJobProgress(env, claimedJob, { progress: 15, stage: 'reading_source' }));
-    const sourceJob = job;
-    const object = await step.do(`load source ${sourceJob.jobId}`, async () => getSourceFile(env, sourceJob));
-    if (!object) throw new Error('Source file is missing');
-    const bytes = await object.arrayBuffer();
-    const file = new File([bytes], job.document.filename, { type: job.document.mimeType });
 
-    if (job.tool === 'image.convert') {
-      await processImageConvertJob(env, step, job, file);
-    } else if (job.document.type === 'pdf') {
-      await processPdfJob(env, step, job, file);
+    if (job.document.type === 'pdf' && job.tool !== 'image.convert') {
+      await processPdfJob(env, step, job);
     } else {
-      await processImageJob(env, step, job, file);
+      const sourceJob = job;
+      const object = await step.do(`load source ${sourceJob.jobId}`, async () => getSourceFile(env, sourceJob));
+      if (!object) throw new Error('Source file is missing');
+      const bytes = await object.arrayBuffer();
+      const file = new File([bytes], job.document.filename, { type: job.document.mimeType });
+      if (job.tool === 'image.convert') {
+        await processImageConvertJob(env, step, job, file);
+      } else {
+        await processImageJob(env, step, job, file);
+      }
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown tools job error';
     const latest = (await getJob(env, job.clientId, job.jobId)) ?? job;
     let cancelled = false;
+    const shouldRetry = job.attemptCount < maxJobAttempts(env);
     if (isCancelRequested(latest)) {
       await completeCancelledJob(env, latest);
       cancelled = true;
+    } else if (shouldRetry) {
+      await requeueJobForRetry(env, latest, message);
     } else {
       await failJob(env, latest, message);
     }
     await deliverDueWebhooks(env);
-    if (!cancelled && job.attemptCount < maxJobAttempts(env)) throw error;
+    if (!cancelled && shouldRetry) throw error;
   }
 }
 
 async function processImageJob(env: StorageEnv, step: WorkflowStepLike, job: StoredJob, file: File) {
+  const ocrMode = ocrModeForJob(job);
   job = await step.do(`image progress ${job.jobId}`, async () =>
     updateJobProgress(env, job, { progress: 50, stage: 'ocr', currentPage: 0, totalPages: 1 }),
   );
   await assertNotCancelled(env, job);
-  const result = await step.do(`ocr image ${job.jobId}`, async () => ocrImage(env, file));
+  const result = await step.do(`ocr image ${job.jobId}`, async () => withRequestedOcrModeMetadata(await ocrImage(env, file, ocrMode), ocrMode));
   await assertNotCancelled(env, job);
   job = await step.do(`store image result ${job.jobId}`, async () => updateJobProgress(env, job, { progress: 90, stage: 'storing_result' }));
   await step.do(`ready image ${job.jobId}`, async () => setJobResult(env, job, result));
@@ -485,25 +498,43 @@ async function processImageConvertJob(env: StorageEnv, step: WorkflowStepLike, j
   await deliverDueWebhooks(env);
 }
 
-async function processPdfJob(env: StorageEnv, step: WorkflowStepLike, job: StoredJob, file: File) {
+async function processPdfJob(env: StorageEnv, step: WorkflowStepLike, job: StoredJob) {
+  const ocrMode = ocrModeForJob(job);
   job = await step.do(`plan pdf ${job.jobId}`, async () => updateJobProgress(env, job, { progress: 20, stage: 'planning_pages' }));
-  const info = await step.do(`pdf info ${job.jobId}`, async () => getPdfInfo(env, file));
+  const infoSource = await step.do(`load pdf info source ${job.jobId}`, async () => getSourceFile(env, job));
+  if (!infoSource) throw new Error('Source file is missing');
+  const info = await step.do(`pdf info ${job.jobId}`, async () => getPdfInfoFromObject(env, infoSource, job.document.filename));
   if (info.pageCount > MAX_PDF_PAGES) throw new Error(`PDF has ${info.pageCount} pages; max supported pages is ${MAX_PDF_PAGES}`);
   await step.do(`init pages ${job.jobId}`, async () => initializeJobPages(env, job, info.pageCount));
   job = await step.do(`pdf planned ${job.jobId}`, async () =>
     updateJobProgress(env, job, { progress: 25, stage: 'ocr', currentPage: 0, totalPages: info.pageCount }),
   );
 
-  for (let pageIndex = 0; pageIndex < info.pageCount; pageIndex += 1) {
+  for (let batchStart = 0; batchStart < info.pageCount; batchStart += PDF_BATCH_SIZE) {
     await assertNotCancelled(env, job);
-    const claimed = await step.do(`claim page ${job.jobId} ${pageIndex}`, async () => claimJobPage(env, job, pageIndex));
-    if (!claimed) continue;
+    const batchPageCount = Math.min(PDF_BATCH_SIZE, info.pageCount - batchStart);
+    const batchEnd = batchStart + batchPageCount;
+    const claimedPages: number[] = [];
+    for (let pageIndex = batchStart; pageIndex < batchEnd; pageIndex += 1) {
+      const claimed = await step.do(`claim page ${job.jobId} ${pageIndex}`, async () => claimJobPage(env, job, pageIndex));
+      if (claimed) claimedPages.push(pageIndex);
+    }
+    if (claimedPages.length === 0) continue;
     try {
-      const pageResult = await step.do(`ocr page ${job.jobId} ${pageIndex}`, async () => ocrPdfPage(env, file, pageIndex));
-      const page = normalizePageResult(pageResult, pageIndex);
-      job = await step.do(`store page ${job.jobId} ${pageIndex}`, async () => setJobPageResult(env, job, page));
+      const batchSource = await step.do(`load pdf batch source ${job.jobId} ${batchStart}`, async () => getSourceFile(env, job));
+      if (!batchSource) throw new Error('Source file is missing');
+      const batchResult = await step.do(`ocr pdf batch ${job.jobId} ${batchStart}-${batchEnd - 1}`, async () =>
+        ocrPdfBatchFromObject(env, batchSource, job.document.filename, batchStart, batchPageCount, ocrMode),
+      );
+      const pagesByIndex = new Map(batchResult.pages.map((page) => [page.pageIndex, page]));
+      for (const pageIndex of claimedPages) {
+        const batchPage = pagesByIndex.get(pageIndex);
+        if (!batchPage) throw new Error(`OCR engine returned no result for page ${pageIndex + 1}`);
+        const page = normalizePageResult({ ...batchResult, pages: [batchPage] }, pageIndex);
+        job = await step.do(`store page ${job.jobId} ${pageIndex}`, async () => setJobPageResult(env, job, page));
+      }
     } catch (error) {
-      await failJobPage(env, job, pageIndex, error instanceof Error ? error.message : 'Page OCR failed');
+      await Promise.all(claimedPages.map((pageIndex) => failJobPage(env, job, pageIndex, error instanceof Error ? error.message : 'Page OCR failed')));
       throw error;
     }
   }
@@ -571,10 +602,23 @@ async function assertNotCancelled(env: StorageEnv, job: StoredJob) {
 function normalizePageResult(result: OcrResult, pageIndex: number): OcrPage {
   const page = result.pages[0];
   if (!page) throw new Error(`OCR engine returned no result for page ${pageIndex + 1}`);
-  return { ...page, pageIndex };
+  return {
+    ...page,
+    pageIndex,
+    ocrMode: page.ocrMode ?? result.ocrMode,
+    requestedOcrMode: page.requestedOcrMode ?? result.requestedOcrMode,
+    fallbackUsed: page.fallbackUsed ?? result.fallbackUsed,
+    ...(page.quality === undefined && result.quality !== undefined ? { quality: result.quality } : {}),
+    ...(page.timingsMs === undefined && result.timingsMs !== undefined ? { timingsMs: result.timingsMs } : {}),
+  };
 }
 
 function buildPdfResult(job: StoredJob, pages: OcrPage[]): OcrResult {
+  const requestedOcrMode = ocrModeForJob(job);
+  const fallbackUsed = pages.some((page) => page.fallbackUsed || (page.ocrMode && page.ocrMode !== requestedOcrMode));
+  const ocrMode: OcrMode = fallbackUsed ? 'accurate' : requestedOcrMode;
+  const quality = buildOcrQuality(pages);
+  const timingsMs = aggregateOcrTimings(pages);
   const plainText = pages.map((page) => page.text).filter(Boolean).join('\n\n');
   const markdown = pages
     .map((page) => (page.text ? `## Page ${page.pageIndex + 1}\n\n${page.text}` : ''))
@@ -588,11 +632,97 @@ function buildPdfResult(job: StoredJob, pages: OcrPage[]): OcrResult {
     pages,
     plainText,
     markdown,
+    ocrMode,
+    requestedOcrMode,
+    fallbackUsed,
+    quality,
+    ...(timingsMs ? { timingsMs } : {}),
+    metadata: {
+      ocrMode,
+      requestedOcrMode,
+      fallbackUsed,
+      quality,
+      ...(timingsMs ? { timingsMs } : {}),
+    },
   };
 }
 
+function aggregateOcrTimings(pages: OcrPage[]) {
+  const totals: Record<string, number> = {};
+  let hasTimings = false;
+  for (const page of pages) {
+    const timings = page.timingsMs;
+    if (!timings) continue;
+    hasTimings = true;
+    for (const [key, value] of Object.entries(timings)) {
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        totals[key] = (totals[key] ?? 0) + value;
+      }
+    }
+  }
+  if (!hasTimings) return null;
+  return Object.fromEntries(Object.entries(totals).map(([key, value]) => [key, Math.round(value * 1000) / 1000]));
+}
+
+function buildOcrQuality(pages: OcrPage[]) {
+  const text = pages.map((page) => page.text).join('');
+  const effectiveTextLength = text.replace(/\s+/g, '').length;
+  const blocks = pages.flatMap((page) => page.blocks);
+  const confidenceValues = blocks
+    .map((block) => block.confidence)
+    .filter((value): value is number => typeof value === 'number');
+  const averageConfidence = confidenceValues.length > 0 ? confidenceValues.reduce((total, value) => total + value, 0) / confidenceValues.length : null;
+  const reasons: string[] = [];
+  if (blocks.length === 0) reasons.push('no_blocks');
+  if (effectiveTextLength < 20) reasons.push('short_text');
+  if (averageConfidence !== null && averageConfidence < 0.82) reasons.push('low_confidence');
+  const fallbackReasons = [...reasons];
+  let pageQualityMetadataFound = false;
+  let lowQualityPageCount = 0;
+  for (const page of pages) {
+    const quality = qualityRecord(page.quality);
+    const initialQuality = qualityRecord(quality?.initial);
+    const pageFallbackReasons = [
+      ...stringArray(quality?.fallbackReasons),
+      ...stringArray(quality?.reasons),
+      ...stringArray(initialQuality?.fallbackReasons),
+      ...stringArray(initialQuality?.reasons),
+    ];
+    if (quality || initialQuality) pageQualityMetadataFound = true;
+    appendUnique(fallbackReasons, pageFallbackReasons);
+    if (quality?.lowQuality === true || initialQuality?.lowQuality === true || pageFallbackReasons.length > 0) {
+      lowQualityPageCount += 1;
+    }
+  }
+  return {
+    score: averageConfidence ?? (blocks.length > 0 ? 0.75 : 0),
+    lowQuality: reasons.length > 0,
+    reasons,
+    fallbackReasons,
+    blockCount: blocks.length,
+    effectiveTextLength,
+    averageConfidence,
+    pageCount: pages.length,
+    lowQualityPageCount: pageQualityMetadataFound ? lowQualityPageCount : reasons.length > 0 ? 1 : 0,
+  };
+}
+
+function qualityRecord(value: unknown): (OcrQuality & Record<string, unknown>) | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as OcrQuality & Record<string, unknown>) : undefined;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function appendUnique(target: string[], values: string[]) {
+  for (const value of values) {
+    if (!target.includes(value)) target.push(value);
+  }
+}
+
 async function readUploadedFile(request: Request): Promise<
-  | { ok: true; file: File; callbackUrl?: string; metadata?: Record<string, unknown> }
+  | { ok: true; file: File; ocrMode: OcrMode; callbackUrl?: string; metadata?: Record<string, unknown> }
   | { ok: false; status: 400 | 413 | 415; error: string }
 > {
   const contentType = request.headers.get('content-type') ?? '';
@@ -622,7 +752,10 @@ async function readUploadedFile(request: Request): Promise<
     return { ok: false, status: 400, error: 'metadata must be a JSON object string' };
   }
 
-  return { ok: true, file, ...(callbackUrl ? { callbackUrl } : {}), ...(metadata ? { metadata } : {}) };
+  const parsedOcrMode = parseOcrMode(form);
+  if (!parsedOcrMode.ok) return parsedOcrMode;
+
+  return { ok: true, file, ocrMode: parsedOcrMode.ocrMode, ...(callbackUrl ? { callbackUrl } : {}), ...(metadata ? { metadata } : {}) };
 }
 
 async function readImageConvertRequest(request: Request): Promise<
@@ -684,11 +817,49 @@ function parseImageConvertOptions(form: FormData): { ok: true; options: ImageCon
   return { ok: true, options: parsed.data };
 }
 
+function parseOcrMode(form: FormData): { ok: true; ocrMode: OcrMode } | { ok: false; status: 400; error: string } {
+  const value = form.get('ocrMode');
+  if (value !== null && typeof value !== 'string') {
+    return { ok: false, status: 400, error: 'ocrMode must be a string' };
+  }
+  const parsed = OcrModeSchema.safeParse(value ?? undefined);
+  if (!parsed.success) {
+    return { ok: false, status: 400, error: 'ocrMode must be one of fast, balanced, accurate' };
+  }
+  return { ok: true, ocrMode: parsed.data };
+}
+
 function numberField(value: FormDataEntryValue, name: string): number | null {
   if (typeof value !== 'string' || value.trim() === '') return null;
   const parsed = Number(value);
   if (!Number.isInteger(parsed)) return null;
   return parsed;
+}
+
+function ocrModeForJob(job: StoredJob): OcrMode {
+  const parsed = OcrModeSchema.safeParse(job.toolOptions?.ocrMode);
+  return parsed.success ? parsed.data : 'balanced';
+}
+
+function withRequestedOcrModeMetadata(result: OcrResult, requestedOcrMode: OcrMode): OcrResult {
+  const metadata = result.metadata ?? {};
+  const ocrMode = metadata.ocrMode ?? result.ocrMode ?? requestedOcrMode;
+  const normalizedRequestedOcrMode = metadata.requestedOcrMode ?? result.requestedOcrMode ?? requestedOcrMode;
+  const fallbackUsed = metadata.fallbackUsed ?? result.fallbackUsed ?? ocrMode !== normalizedRequestedOcrMode;
+  return {
+    ...result,
+    ocrMode: result.ocrMode ?? ocrMode,
+    requestedOcrMode: result.requestedOcrMode ?? normalizedRequestedOcrMode,
+    fallbackUsed,
+    metadata: {
+      ...metadata,
+      ocrMode,
+      requestedOcrMode: normalizedRequestedOcrMode,
+      fallbackUsed,
+      ...(metadata.quality === undefined && result.quality !== undefined ? { quality: result.quality } : {}),
+      ...(metadata.timingsMs === undefined && result.timingsMs !== undefined ? { timingsMs: result.timingsMs } : {}),
+    },
+  };
 }
 
 function jsonSuccess(c: AppContext, data: unknown, status: 200 | 202 = 200): Response {

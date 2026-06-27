@@ -773,6 +773,29 @@ export async function failJob(
   return updated;
 }
 
+export async function requeueJobForRetry(
+  env: JobStoreEnv & { DB: D1Database },
+  job: StoredJob,
+  error: string,
+): Promise<StoredJob> {
+  const latest = await getJobForProcessing(env, job.jobId);
+  if (latest && isCancelRequested(latest)) return completeCancelledJob(env, latest);
+  const timestamp = new Date().toISOString();
+  await env.DB.prepare(
+    `UPDATE ocr_jobs
+     SET status = ?, progress = ?, stage = ?, error = ?, processing_started_at = NULL,
+         processing_lease_until = NULL, completed_at = NULL, updated_at = ?
+     WHERE job_id = ? AND status = ?`,
+  )
+    .bind('queued', 0, 'queued', error, timestamp, job.jobId, 'processing')
+    .run();
+
+  const updated = await getJobForProcessing(env, job.jobId);
+  if (!updated) throw new Error('Retryable job not found');
+  await appendJobEvent(env, updated, 'job.status');
+  return updated;
+}
+
 async function createCancelledWebhook(
   env: JobStoreEnv & { DB: D1Database },
   job: StoredJob,

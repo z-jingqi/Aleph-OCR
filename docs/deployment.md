@@ -68,6 +68,19 @@ export ALEPH_TOOLS_DOMAIN_PROD="tools.aleph-cat.com"
 
 The Gateway invokes the Python tools engine through an internal Cloudflare Container Durable Object binding. The engine does not need a public URL, and `ALEPH_TOOLS_ENGINE_URL_DEV/PROD` are not part of the Cloudflare deployment path. Local development still uses `apps/gateway/wrangler.local.jsonc` to reach `http://127.0.0.1:8090`.
 
+## Tools Container Model Cache
+
+The production container image should include predownloaded PaddleOCR models. Runtime requests should not be responsible for model resolution or download.
+
+Set both model-source flags in the image build environment. `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True` is the PaddleX flag that disables the runtime model source connectivity check; `DISABLE_MODEL_SOURCE_CHECK=True` is kept only as a legacy compatibility alias.
+
+```bash
+cd apps/ocr-container
+PADDLEOCR_HOME=/models/paddleocr PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True scripts/download-models.sh
+```
+
+Before promoting an image, run the local benchmark inside the same image or machine class and confirm that the model cache is present and default `balanced` fixtures do not fall back. See [OCR Performance Benchmarking](./benchmark/ocr-performance.md) for the benchmark command, cold/warm interpretation, modes, fallback semantics, and performance acceptance gates.
+
 ## Worker Secrets
 
 Set these for each generated config:
@@ -195,4 +208,4 @@ D1 migrations are forward-only in normal operation. If a deployment needs to be 
 - Use `Idempotency-Key` for all job creation retries.
 - Treat `data.status`, `data.terminal`, `data.resultAvailable`, `data.outputAvailable`, and `error.code` as the external integration contract.
 - Webhook delivery failure never rolls back a completed job. Use the delivery retry path and the polling fallback endpoints for recovery.
-- The first production target is PDFs up to 100 pages and single-image conversion jobs.
+- The production target is PDFs up to 100 pages and single-image conversion jobs.

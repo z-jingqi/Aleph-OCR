@@ -42,6 +42,8 @@ PaddleOCR and PaddlePaddle are heavy dependencies. The first OCR request may dow
 apps/ocr-container/scripts/download-models.sh
 ```
 
+For service-free local OCR benchmark guidance, modes, cold/warm interpretation, and performance acceptance gates, see [docs/benchmark/ocr-performance.md](docs/benchmark/ocr-performance.md).
+
 ## Local Development
 
 Start the tools container first:
@@ -158,6 +160,7 @@ For async image conversion use `POST /v1/tools/image/convert` with PNG, JPEG, We
 - `pnpm lint` - Run non-mutating checks.
 - `pnpm test` - Run gateway unit tests and container syntax checks.
 - `pnpm clean` - Remove build outputs.
+- `pnpm --filter @aleph-tools/tools-container benchmark:ocr` - Run the local OCR fixture benchmark directly against Python engine functions.
 - `pnpm deploy:check:dev` / `pnpm deploy:check:prod` - Check required deployment environment variables without calling Cloudflare.
 - `pnpm deploy:check:ci:dev` / `pnpm deploy:check:ci:prod` - Strict deployment check including CI and secret values expected by automation.
 - `pnpm deploy:dry-run:dev` / `pnpm deploy:dry-run:prod` - Generate config and run Wrangler deploy validation.

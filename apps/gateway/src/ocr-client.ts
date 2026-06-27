@@ -4,6 +4,7 @@ import {
   type EngineInfo,
   type ImageConvertFormat,
   type ImageConvertOptions,
+  type OcrMode,
   type OcrResult,
 } from '@aleph-tools/shared';
 
@@ -30,6 +31,10 @@ export type ImageConvertResponse = {
   format: ImageConvertFormat;
 };
 
+export type PdfSourceObject = {
+  body: ReadableStream;
+};
+
 export class OcrEngineError extends Error {
   constructor(message: string, public status = 503) {
     super(message);
@@ -43,18 +48,18 @@ export async function getEngineInfo(env: ToolsClientEnv): Promise<EngineInfo> {
   return EngineInfoSchema.parse(data);
 }
 
-export async function ocrImage(env: ToolsClientEnv, file: File): Promise<OcrResult> {
+export async function ocrImage(env: ToolsClientEnv, file: File, mode: OcrMode = 'balanced'): Promise<OcrResult> {
   const form = new FormData();
   form.append('file', file, file.name);
-  const response = await engineFetch(env, '/internal/ocr/image', { method: 'POST', body: form });
+  const response = await engineFetch(env, ocrPath('/internal/ocr/image', mode), { method: 'POST', body: form });
   const data = await response.json();
   return OcrResultSchema.parse(data);
 }
 
-export async function ocrPdf(env: ToolsClientEnv, file: File): Promise<OcrResult> {
+export async function ocrPdf(env: ToolsClientEnv, file: File, mode: OcrMode = 'balanced'): Promise<OcrResult> {
   const form = new FormData();
   form.append('file', file, file.name);
-  const response = await engineFetch(env, '/internal/ocr/pdf', { method: 'POST', body: form });
+  const response = await engineFetch(env, ocrPath('/internal/ocr/pdf', mode), { method: 'POST', body: form });
   const data = await response.json();
   return OcrResultSchema.parse(data);
 }
@@ -70,10 +75,42 @@ export async function getPdfInfo(env: ToolsClientEnv, file: File): Promise<{ pag
   return { pageCount: Number(data.pageCount) };
 }
 
-export async function ocrPdfPage(env: ToolsClientEnv, file: File, pageIndex: number): Promise<OcrResult> {
+export async function getPdfInfoFromObject(env: ToolsClientEnv, object: PdfSourceObject, filename: string): Promise<{ pageCount: number }> {
+  const response = await engineFetch(env, pdfRawPath('/internal/ocr/pdf-info', { filename }), {
+    method: 'POST',
+    body: object.body,
+    duplex: 'half',
+    headers: { 'Content-Type': 'application/pdf' },
+  } as RequestInit & { duplex: 'half' });
+  const data = (await response.json()) as { pageCount?: unknown };
+  if (!Number.isInteger(data.pageCount) || Number(data.pageCount) < 0) {
+    throw new OcrEngineError('OCR engine returned invalid PDF metadata', 500);
+  }
+  return { pageCount: Number(data.pageCount) };
+}
+
+export async function ocrPdfPage(env: ToolsClientEnv, file: File, pageIndex: number, mode: OcrMode = 'balanced'): Promise<OcrResult> {
   const form = new FormData();
   form.append('file', file, file.name);
-  const response = await engineFetch(env, `/internal/ocr/pdf-page?page_index=${pageIndex}`, { method: 'POST', body: form });
+  const response = await engineFetch(env, ocrPath('/internal/ocr/pdf-page', mode, { page_index: pageIndex }), { method: 'POST', body: form });
+  const data = await response.json();
+  return OcrResultSchema.parse(data);
+}
+
+export async function ocrPdfBatchFromObject(
+  env: ToolsClientEnv,
+  object: PdfSourceObject,
+  filename: string,
+  startPage: number,
+  pageCount: number,
+  mode: OcrMode = 'balanced',
+): Promise<OcrResult> {
+  const response = await engineFetch(env, ocrPath('/internal/ocr/pdf-batch', mode, { filename, start_page: startPage, page_count: pageCount }), {
+    method: 'POST',
+    body: object.body,
+    duplex: 'half',
+    headers: { 'Content-Type': 'application/pdf' },
+  } as RequestInit & { duplex: 'half' });
   const data = await response.json();
   return OcrResultSchema.parse(data);
 }
@@ -140,4 +177,22 @@ function mimeTypeForFormat(format: ImageConvertFormat): string {
 
 function isImageConvertFormat(value: string): value is ImageConvertFormat {
   return ['png', 'jpeg', 'webp', 'avif'].includes(value);
+}
+
+function ocrPath(path: string, mode: OcrMode, params: Record<string, string | number> = {}): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    search.set(key, String(value));
+  }
+  search.set('mode', mode);
+  return `${path}?${search.toString()}`;
+}
+
+function pdfRawPath(path: string, params: Record<string, string | number> = {}): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    search.set(key, String(value));
+  }
+  const suffix = search.toString();
+  return suffix ? `${path}?${suffix}` : path;
 }
