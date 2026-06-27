@@ -6,6 +6,7 @@
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
+    "dev:local": "bash scripts/start-local.sh",
     "test": "turbo run test",
     "lint": "turbo run lint",
     "clean": "turbo run clean",

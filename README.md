@@ -46,21 +46,26 @@ For service-free local OCR benchmark guidance, modes, cold/warm interpretation, 
 
 ## Local Development
 
-Start the tools container first:
+Start the local tools engine container and Worker gateway together:
+
+```bash
+pnpm dev:local
+```
+
+The script uses `aleph-tools-container:local`, creates `apps/gateway/.dev.vars` if needed, applies local D1 migrations, and starts the gateway on `http://127.0.0.1:8787`. Default local API key from the example file is `dev-key`.
+
+Force a fresh container image build before startup:
+
+```bash
+REBUILD_IMAGE=1 pnpm dev:local
+```
+
+Run services separately when debugging a single process:
 
 ```bash
 pnpm --filter @aleph-tools/tools-container dev
-```
-
-Start the Worker gateway:
-
-```bash
-cp apps/gateway/.dev.vars.example apps/gateway/.dev.vars
-pnpm --filter @aleph-tools/gateway d1:migrate:local
 pnpm --filter @aleph-tools/gateway dev
 ```
-
-Default local API key from the example file is `dev-key`.
 
 ## Cloudflare Production
 
@@ -153,6 +158,7 @@ For async image conversion use `POST /v1/tools/image/convert` with PNG, JPEG, We
 ## Scripts
 
 - `pnpm build` - Type-check/build all packages.
+- `pnpm dev:local` - Start the local tools engine container and Worker gateway together.
 - `pnpm lint` - Run non-mutating checks.
 - `pnpm test` - Run gateway unit tests and container syntax checks.
 - `pnpm clean` - Remove build outputs.
