@@ -60,7 +60,7 @@ The Python engine runs the requested mode directly. `fast` and `balanced` automa
 There are two fallback layers to keep separate:
 
 - Quality fallback: `fast` and `balanced` run a second `accurate` pass when the first pass returns no blocks, very short text, low average confidence, or an abnormally short numeric/table-like result. Results expose `fallbackUsed=true`, `requestedOcrMode`, final `ocrMode`, `quality.fallbackReasons`, and `timingsMs.requestedTotal/fallbackTotal`.
-- Execution fallback: the gateway starts Cloudflare Workflows when configured and falls back to the queue processor when only `OCR_JOBS` is available. The local benchmark bypasses both paths and does not validate Workflow or Queue latency.
+- Execution fallback: the gateway starts Cloudflare Workflows when configured and falls back to the queue processor when only `TOOLS_JOBS` is available. The local benchmark bypasses both paths and does not validate Workflow or Queue latency.
 
 Fallback is a quality signal, not a failure. Production acceptance should fail when fallback is caused by missing models or dependencies, but quality fallback is expected for difficult inputs as long as `fallbackUsed` and timings are recorded.
 

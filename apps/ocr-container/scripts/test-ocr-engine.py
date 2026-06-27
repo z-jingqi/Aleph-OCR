@@ -81,8 +81,6 @@ def test_model_source_check_env_is_configured() -> None:
 
     assert "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True" in dockerfile
     assert "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK" in download_script
-    assert "DISABLE_MODEL_SOURCE_CHECK" in dockerfile
-    assert "DISABLE_MODEL_SOURCE_CHECK" in download_script
 
 
 def test_mode_config_and_cache() -> None:

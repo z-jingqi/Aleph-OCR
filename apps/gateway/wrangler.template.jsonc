@@ -8,7 +8,6 @@
   "vars": {
     "APP_ENV": "__ENV__",
     "ALEPH_TOOLS_ENGINE_URL": "__TOOLS_ENGINE_URL__",
-    "OCR_ENGINE_URL": "__TOOLS_ENGINE_URL__",
     "JOB_RETENTION_DAYS": "7"
   },
   "d1_databases": [
@@ -28,7 +27,7 @@
     }
   ],
   "queues": {
-    "producers": [{ "binding": "OCR_JOBS", "queue": "__QUEUE__" }],
+    "producers": [{ "binding": "TOOLS_JOBS", "queue": "__QUEUE__" }],
     "consumers": [{ "queue": "__QUEUE__", "max_batch_size": 5, "max_batch_timeout": 10 }]
   },
   "containers": [

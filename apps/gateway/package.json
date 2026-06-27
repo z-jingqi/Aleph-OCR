@@ -9,7 +9,7 @@
     "build": "tsc --noEmit",
     "lint": "tsc --noEmit",
     "test": "vitest run",
-    "d1:migrate:local": "wrangler d1 migrations apply aleph-ocr-local --local --config wrangler.local.jsonc",
+    "d1:migrate:local": "wrangler d1 migrations apply aleph-tools-local --local --config wrangler.local.jsonc",
     "clean": "rm -rf dist .wrangler"
   },
   "dependencies": {

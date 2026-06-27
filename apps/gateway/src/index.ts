@@ -2,7 +2,6 @@ import { Hono, type Context } from 'hono';
 import { Container } from '@cloudflare/containers';
 import { WorkflowEntrypoint } from 'cloudflare:workers';
 import {
-  ALEPH_OCR_VERSION,
   ALEPH_TOOLS_VERSION,
   ImageConvertOptionsSchema,
   MAX_PDF_PAGES,
@@ -65,10 +64,9 @@ export class ToolsEngineContainer extends Container {
 interface Env extends AuthEnv, ToolsClientEnv {
   DB?: D1Database;
   ASSETS?: R2Bucket;
-  OCR_JOBS?: Queue<QueueMessage>;
+  TOOLS_JOBS?: Queue<QueueMessage>;
   TOOLS_ENGINE?: DurableObjectNamespace<ToolsEngineContainer>;
   TOOLS_WORKFLOW?: Workflow<ToolWorkflowParams>;
-  OCR_WORKFLOW?: Workflow<ToolWorkflowParams>;
   JOB_RETENTION_DAYS?: string;
   WEBHOOK_SIGNING_SECRET?: string;
   MAX_JOB_ATTEMPTS?: string;
@@ -100,7 +98,6 @@ app.get('/health', (c) =>
     status: 'ok',
     service: 'aleph-tools-gateway',
     version: ALEPH_TOOLS_VERSION,
-    legacyVersion: ALEPH_OCR_VERSION,
     timestamp: new Date().toISOString(),
     requestId: c.get('requestId'),
   }),
@@ -551,7 +548,7 @@ async function runScheduledMaintenance(env: Env) {
   try {
     requireStorage(env);
     const requeued = await resetExpiredProcessingJobs(env);
-    const queue = env.OCR_JOBS;
+    const queue = env.TOOLS_JOBS;
     if (queue) {
       await Promise.all(requeued.map((jobId) => queue.send({ jobId })));
     }
@@ -564,7 +561,7 @@ async function runScheduledMaintenance(env: Env) {
 }
 
 async function startToolWorkflow(env: Env, jobId: string, workflowId: string) {
-  const workflow = env.TOOLS_WORKFLOW ?? env.OCR_WORKFLOW;
+  const workflow = env.TOOLS_WORKFLOW;
   if (workflow) {
     await workflow.create({
       id: workflowId,
@@ -573,12 +570,12 @@ async function startToolWorkflow(env: Env, jobId: string, workflowId: string) {
     });
     return;
   }
-  if (!env.OCR_JOBS) throw new Error('Tools workflow is not configured');
-  await env.OCR_JOBS.send({ jobId });
+  if (!env.TOOLS_JOBS) throw new Error('Tools workflow is not configured');
+  await env.TOOLS_JOBS.send({ jobId });
 }
 
 function workflowConfigured(env: Env): boolean {
-  return Boolean(env.TOOLS_WORKFLOW ?? env.OCR_WORKFLOW ?? env.OCR_JOBS);
+  return Boolean(env.TOOLS_WORKFLOW ?? env.TOOLS_JOBS);
 }
 
 function createInlineWorkflowStep(): WorkflowStepLike {
@@ -1026,10 +1023,6 @@ async function deliverWebhook(env: Env & { DB: D1Database }, delivery: WebhookDe
         'X-Aleph-Tools-Delivery-Id': delivery.deliveryId,
         'X-Aleph-Tools-Timestamp': timestamp,
         'X-Aleph-Tools-Signature': signature,
-        'X-Aleph-OCR-Event-Id': delivery.eventId,
-        'X-Aleph-OCR-Delivery-Id': delivery.deliveryId,
-        'X-Aleph-OCR-Timestamp': timestamp,
-        'X-Aleph-OCR-Signature': signature,
       },
       body,
     }));
@@ -1041,7 +1034,8 @@ async function deliverWebhook(env: Env & { DB: D1Database }, delivery: WebhookDe
 }
 
 async function signWebhook(env: Env, timestamp: string, body: string): Promise<string> {
-  const secret = env.WEBHOOK_SIGNING_SECRET ?? env.ALEPH_TOOLS_API_KEYS ?? env.ALEPH_OCR_API_KEYS ?? 'aleph-tools-local-webhook-secret';
+  const secret = env.WEBHOOK_SIGNING_SECRET;
+  if (!secret) throw new Error('WEBHOOK_SIGNING_SECRET is not configured');
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${timestamp}.${body}`));
   return `sha256=${toHex(signature)}`;

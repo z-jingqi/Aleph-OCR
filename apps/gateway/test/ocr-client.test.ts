@@ -78,6 +78,19 @@ describe('tools engine client', () => {
     expect(globalFetch).toHaveBeenCalledWith('https://external-engine.example.com/health', expect.any(Object));
   });
 
+  it('sends only the tools internal token header', async () => {
+    const globalFetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      expect(headers.get('X-Aleph-Tools-Internal-Token')).toBe('internal-token');
+      expect([...headers.keys()].some((name) => name.startsWith('x-aleph-') && name.includes('ocr'))).toBe(false);
+      return Response.json(engineInfo);
+    });
+
+    await getEngineInfo({ ALEPH_TOOLS_ENGINE_URL: 'https://external-engine.example.com', TOOLS_ENGINE_TOKEN: 'internal-token' });
+
+    expect(globalFetch).toHaveBeenCalledTimes(1);
+  });
+
   it('passes OCR mode as a query parameter to image and PDF endpoints', async () => {
     const globalFetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json(ocrResult));
     const file = new File(['abc'], 'receipt.png', { type: 'image/png' });

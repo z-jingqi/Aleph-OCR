@@ -7,21 +7,20 @@
   "workers_dev": true,
   "vars": {
     "ALEPH_TOOLS_ENGINE_URL": "http://127.0.0.1:8090",
-    "OCR_ENGINE_URL": "http://127.0.0.1:8090",
     "JOB_RETENTION_DAYS": "7"
   },
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "aleph-ocr-local",
+      "database_name": "aleph-tools-local",
       "database_id": "local",
       "migrations_dir": "./migrations"
     }
   ],
-  "r2_buckets": [{ "binding": "ASSETS", "bucket_name": "aleph-ocr-local-assets" }],
+  "r2_buckets": [{ "binding": "ASSETS", "bucket_name": "aleph-tools-local-assets" }],
   "queues": {
-    "producers": [{ "binding": "OCR_JOBS", "queue": "aleph-ocr-local-jobs" }],
-    "consumers": [{ "queue": "aleph-ocr-local-jobs", "max_batch_size": 5, "max_batch_timeout": 10 }]
+    "producers": [{ "binding": "TOOLS_JOBS", "queue": "aleph-tools-local-jobs" }],
+    "consumers": [{ "queue": "aleph-tools-local-jobs", "max_batch_size": 5, "max_batch_timeout": 10 }]
   },
   "triggers": { "crons": ["17 3 * * *"] },
   "observability": { "enabled": true, "head_sampling_rate": 1 }

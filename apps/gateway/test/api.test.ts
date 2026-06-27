@@ -260,6 +260,28 @@ describe('gateway API', () => {
     expect(requestUrl(fetchMock.mock.calls[0]![0]).searchParams.get('mode')).toBe('fast');
   });
 
+  it('queues async jobs through TOOLS_JOBS when workflow is not configured', async () => {
+    const env = fakeEnv();
+    delete env.TOOLS_WORKFLOW;
+    const form = new FormData();
+    form.append('file', await fixtureFile('images/receipt.png', 'image/png'));
+
+    const response = await handler.fetch(
+      new Request('https://ocr.test/v1/jobs', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key' },
+        body: form,
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+
+    const body = (await response.json()) as { data: { jobId: string } };
+    expect(response.status).toBe(202);
+    expect(env.workflowCreates).toHaveLength(0);
+    expect(env.queueMessages).toEqual([{ jobId: body.data.jobId }]);
+  });
+
   it('rejects invalid async OCR modes with a structured validation error', async () => {
     const env = fakeEnv();
     const form = new FormData();

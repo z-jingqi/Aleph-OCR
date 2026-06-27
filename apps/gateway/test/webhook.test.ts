@@ -36,12 +36,11 @@ describe('webhook delivery', () => {
     expect(delivery.attempt_count).toBe(1);
     expect(webhookRequest?.headers.get('X-Aleph-Tools-Event-Id')).toBe(delivery.event_id);
     expect(webhookRequest?.headers.get('X-Aleph-Tools-Signature')).toMatch(/^sha256=[a-f0-9]{64}$/);
-    expect(webhookRequest?.headers.get('X-Aleph-OCR-Event-Id')).toBe(delivery.event_id);
-    expect(webhookRequest?.headers.get('X-Aleph-OCR-Signature')).toMatch(/^sha256=[a-f0-9]{64}$/);
+    expect([...webhookRequest!.headers.keys()].some((name) => name.startsWith('x-aleph-') && name.includes('ocr'))).toBe(false);
 
     const body = await webhookRequest!.text();
-    const timestamp = webhookRequest!.headers.get('X-Aleph-OCR-Timestamp')!;
-    await expect(verifySignature(env.WEBHOOK_SIGNING_SECRET, timestamp, body, webhookRequest!.headers.get('X-Aleph-OCR-Signature')!)).resolves.toBe(
+    const timestamp = webhookRequest!.headers.get('X-Aleph-Tools-Timestamp')!;
+    await expect(verifySignature(env.WEBHOOK_SIGNING_SECRET, timestamp, body, webhookRequest!.headers.get('X-Aleph-Tools-Signature')!)).resolves.toBe(
       true,
     );
     expect(JSON.parse(body)).toMatchObject({

@@ -11,8 +11,6 @@ import {
 export interface ToolsClientEnv {
   ALEPH_TOOLS_ENGINE_URL?: string;
   TOOLS_ENGINE_TOKEN?: string;
-  OCR_ENGINE_URL?: string;
-  OCR_ENGINE_TOKEN?: string;
   TOOLS_ENGINE?: {
     getByName(name: string): {
       fetch(request: Request): Promise<Response>;
@@ -139,10 +137,9 @@ export async function convertImage(env: ToolsClientEnv, file: File, options: Ima
 
 async function engineFetch(env: ToolsClientEnv, path: string, init: RequestInit): Promise<Response> {
   const headers = new Headers(init.headers);
-  const token = env.TOOLS_ENGINE_TOKEN ?? env.OCR_ENGINE_TOKEN;
+  const token = env.TOOLS_ENGINE_TOKEN;
   if (token) {
     headers.set('X-Aleph-Tools-Internal-Token', token);
-    headers.set('X-Aleph-OCR-Internal-Token', token);
   }
 
   let response: Response;
@@ -151,7 +148,7 @@ async function engineFetch(env: ToolsClientEnv, path: string, init: RequestInit)
       const request = new Request(new URL(path, 'http://tools-engine.internal'), { ...init, headers });
       response = await env.TOOLS_ENGINE.getByName('shared').fetch(request);
     } else {
-      const baseUrl = env.ALEPH_TOOLS_ENGINE_URL || env.OCR_ENGINE_URL || 'http://127.0.0.1:8090';
+      const baseUrl = env.ALEPH_TOOLS_ENGINE_URL || 'http://127.0.0.1:8090';
       response = await fetch(`${baseUrl}${path}`, { ...init, headers });
     }
   } catch (error) {

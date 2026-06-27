@@ -3,6 +3,7 @@ node_modules/
 dist/
 .turbo/
 .wrangler/
+.dev-logs/
 .dev.vars
 .env
 .env.*

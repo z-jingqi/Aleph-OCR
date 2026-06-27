@@ -11,16 +11,16 @@ if (!environment || !['dev', 'prod'].includes(environment)) {
 
 const suffix = environment.toUpperCase();
 const appDir = resolve(repoRoot, 'apps', 'gateway');
-const containerImage = process.env.ALEPH_TOOLS_CONTAINER_IMAGE ?? process.env.ALEPH_OCR_CONTAINER_IMAGE ?? '';
+const containerImage = process.env.ALEPH_TOOLS_CONTAINER_IMAGE ?? '';
 const defaultToolsDomain = environment === 'prod' ? 'tools.aleph-cat.com' : 'dev-tools.aleph-cat.com';
 const values = {
   __ENV__: environment,
   __TOOLS_DOMAIN__: process.env[`ALEPH_TOOLS_DOMAIN_${suffix}`] ?? defaultToolsDomain,
   __TOOLS_ENGINE_URL__: '',
   __TOOLS_CONTAINER_IMAGE__: containerImage,
-  __D1_DATABASE_ID__: process.env[`ALEPH_TOOLS_D1_DATABASE_ID_${suffix}`] ?? process.env[`ALEPH_OCR_D1_DATABASE_ID_${suffix}`] ?? '__D1_DATABASE_ID__',
-  __R2_BUCKET__: process.env[`ALEPH_TOOLS_R2_BUCKET_${suffix}`] ?? process.env[`ALEPH_OCR_R2_BUCKET_${suffix}`] ?? `aleph-tools-assets-${environment}`,
-  __QUEUE__: process.env[`ALEPH_TOOLS_QUEUE_${suffix}`] ?? process.env[`ALEPH_OCR_QUEUE_${suffix}`] ?? `aleph-tools-jobs-${environment}`,
+  __D1_DATABASE_ID__: process.env[`ALEPH_TOOLS_D1_DATABASE_ID_${suffix}`] ?? '__D1_DATABASE_ID__',
+  __R2_BUCKET__: process.env[`ALEPH_TOOLS_R2_BUCKET_${suffix}`] ?? `aleph-tools-assets-${environment}`,
+  __QUEUE__: process.env[`ALEPH_TOOLS_QUEUE_${suffix}`] ?? `aleph-tools-jobs-${environment}`,
 };
 
 for (const name of ['__D1_DATABASE_ID__']) {

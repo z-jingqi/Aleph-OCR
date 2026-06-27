@@ -1,6 +1,6 @@
 # Architecture
 
-Aleph Tools is intentionally split into a lightweight edge gateway and a heavier tools engine. OCR remains a first-class compatible API, and image conversion now uses the same async job infrastructure.
+Aleph Tools is intentionally split into a lightweight edge gateway and a heavier tools engine. OCR remains a first-class API, and image conversion now uses the same async job infrastructure.
 
 ## Gateway Worker
 

@@ -72,7 +72,7 @@ The Gateway invokes the Python tools engine through an internal Cloudflare Conta
 
 The production container image should include predownloaded PaddleOCR models. Runtime requests should not be responsible for model resolution or download.
 
-Set both model-source flags in the image build environment. `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True` is the PaddleX flag that disables the runtime model source connectivity check; `DISABLE_MODEL_SOURCE_CHECK=True` is kept only as a legacy compatibility alias.
+Set the PaddleX model-source flag in the image build environment. `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True` disables the runtime model source connectivity check.
 
 ```bash
 cd apps/ocr-container
@@ -128,8 +128,6 @@ Do not deploy prod before dev has passed smoke tests.
 `deploy:dry-run:*` passes `--containers-rollout=none`, so it validates the Worker and bindings without building or publishing the container image. Real `deploy:*` commands still require Docker or a compatible container build environment when `ALEPH_TOOLS_CONTAINER_IMAGE` points at a Dockerfile.
 
 ## GitHub Actions
-
-The deploy workflow accepts the new `ALEPH_TOOLS_*` names and legacy `ALEPH_OCR_*` fallbacks.
 
 Required GitHub secrets or environment variables:
 

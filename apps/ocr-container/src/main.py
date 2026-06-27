@@ -168,10 +168,10 @@ async def read_pdf_payload(request: Request, file: UploadFile | None, filename: 
     if content_type != "application/pdf":
         raise HTTPException(status_code=400, detail=f"Unsupported PDF type: {content_type or 'unknown'}")
     content = await request.body()
-    return content, filename or request.headers.get("x-aleph-tools-filename") or request.headers.get("x-aleph-ocr-filename") or "document.pdf"
+    return content, filename or request.headers.get("x-aleph-tools-filename") or "document.pdf"
 
 
 def check_internal_token(provided: str | None) -> None:
-    expected = os.getenv("TOOLS_ENGINE_TOKEN") or os.getenv("OCR_ENGINE_TOKEN")
+    expected = os.getenv("TOOLS_ENGINE_TOKEN")
     if expected and provided != expected:
         raise HTTPException(status_code=401, detail="Invalid internal tools token")

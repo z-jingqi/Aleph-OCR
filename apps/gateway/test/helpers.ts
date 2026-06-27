@@ -76,13 +76,10 @@ type DeliveryRow = {
 export type FakeGatewayEnv = {
   DB: D1Database;
   ASSETS: R2Bucket;
-  OCR_JOBS: Queue<{ jobId: string }>;
-  OCR_WORKFLOW?: Workflow<{ jobId: string }>;
+  TOOLS_JOBS: Queue<{ jobId: string }>;
   TOOLS_WORKFLOW?: Workflow<{ jobId: string }>;
   ALEPH_TOOLS_API_KEYS: string;
-  ALEPH_OCR_API_KEYS: string;
   ALEPH_TOOLS_ENGINE_URL: string;
-  OCR_ENGINE_URL: string;
   WEBHOOK_SIGNING_SECRET: string;
   MAX_JOB_ATTEMPTS?: string;
   MAX_ACTIVE_JOBS_PER_CLIENT?: string;
@@ -107,15 +104,13 @@ export function fakeEnv(overrides: Partial<FakeGatewayEnv> = {}): FakeGatewayEnv
   const env = {
     DB: undefined as unknown as D1Database,
     ASSETS: undefined as unknown as R2Bucket,
-    OCR_JOBS: {
+    TOOLS_JOBS: {
       async send(message: { jobId: string }) {
         queueMessages.push(message);
       },
     } as unknown as Queue<{ jobId: string }>,
     ALEPH_TOOLS_API_KEYS: '{"example-client-dev":"dev-key","other-client":"other-key"}',
-    ALEPH_OCR_API_KEYS: '{"example-client-dev":"dev-key","other-client":"other-key"}',
     ALEPH_TOOLS_ENGINE_URL: 'https://engine.test',
-    OCR_ENGINE_URL: 'https://engine.test',
     WEBHOOK_SIGNING_SECRET: 'test-webhook-secret',
     rows,
     events,
@@ -170,7 +165,6 @@ export function fakeEnv(overrides: Partial<FakeGatewayEnv> = {}): FakeGatewayEnv
       return {} as WorkflowInstance;
     },
   } as unknown as Workflow<{ jobId: string }>;
-  (env as FakeGatewayEnv & { OCR_WORKFLOW?: Workflow<{ jobId: string }> }).OCR_WORKFLOW = env.TOOLS_WORKFLOW;
   return env;
 }
 

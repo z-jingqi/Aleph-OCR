@@ -90,15 +90,11 @@ Required GitHub environment secrets:
 - `ALEPH_TOOLS_D1_DATABASE_ID_PROD`
 - `ALEPH_TOOLS_CONTAINER_IMAGE`, when deploying the tools engine through Cloudflare Containers
 
-Legacy `ALEPH_OCR_*` deployment variables remain accepted as fallbacks during the transition.
-
 Required Worker secrets:
 
 - `ALEPH_TOOLS_API_KEYS`, for example `{"example-client-dev":"...","example-client-prod":"..."}`
 - `WEBHOOK_SIGNING_SECRET`, used to sign async job webhook deliveries
 - optional `TOOLS_ENGINE_TOKEN`, if the engine requires the internal token
-
-Legacy `ALEPH_OCR_API_KEYS` and `OCR_ENGINE_TOKEN` are still supported.
 
 Deployment modes:
 

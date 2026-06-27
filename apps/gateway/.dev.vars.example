@@ -1,6 +1,5 @@
-# Accepts either a JSON object mapping client id to key, a JSON array, or comma-separated keys.
-ALEPH_OCR_API_KEYS={"example-client-dev":"dev-key"}
-OCR_ENGINE_URL=http://127.0.0.1:8090
+ALEPH_TOOLS_API_KEYS={"example-client-dev":"dev-key"}
+ALEPH_TOOLS_ENGINE_URL=http://127.0.0.1:8090
 # Optional shared secret for future internal container auth.
-OCR_ENGINE_TOKEN=dev-internal-token
+TOOLS_ENGINE_TOKEN=dev-internal-token
 JOB_RETENTION_DAYS=7

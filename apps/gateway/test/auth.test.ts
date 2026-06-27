@@ -8,14 +8,9 @@ describe('API key parsing', () => {
     ]);
   });
 
-  it('supports legacy arrays and comma-separated local values', () => {
-    expect(parseApiKeys('["a","b"]')).toEqual([
-      { clientId: 'client-1', key: 'a' },
-      { clientId: 'client-2', key: 'b' },
-    ]);
-    expect(parseApiKeys('a,b')).toEqual([
-      { clientId: 'client-1', key: 'a' },
-      { clientId: 'client-2', key: 'b' },
-    ]);
+  it('rejects non-object key formats', () => {
+    expect(parseApiKeys('["a","b"]')).toEqual([]);
+    expect(parseApiKeys('a,b')).toEqual([]);
+    expect(parseApiKeys('')).toEqual([]);
   });
 });

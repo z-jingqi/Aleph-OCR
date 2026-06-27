@@ -13,19 +13,19 @@ const checks = [
   {
     label: 'D1 database id',
     required: true,
-    names: [`ALEPH_TOOLS_D1_DATABASE_ID_${suffix}`, `ALEPH_OCR_D1_DATABASE_ID_${suffix}`],
+    names: [`ALEPH_TOOLS_D1_DATABASE_ID_${suffix}`],
     note: 'Required to generate the remote Wrangler config.',
   },
   {
     label: 'R2 bucket',
     required: false,
-    names: [`ALEPH_TOOLS_R2_BUCKET_${suffix}`, `ALEPH_OCR_R2_BUCKET_${suffix}`],
+    names: [`ALEPH_TOOLS_R2_BUCKET_${suffix}`],
     note: `Defaults to aleph-tools-assets-${environment}.`,
   },
   {
     label: 'Queue',
     required: false,
-    names: [`ALEPH_TOOLS_QUEUE_${suffix}`, `ALEPH_OCR_QUEUE_${suffix}`],
+    names: [`ALEPH_TOOLS_QUEUE_${suffix}`],
     note: `Defaults to aleph-tools-jobs-${environment}.`,
   },
   {
@@ -37,13 +37,13 @@ const checks = [
   {
     label: 'Container image',
     required: true,
-    names: ['ALEPH_TOOLS_CONTAINER_IMAGE', 'ALEPH_OCR_CONTAINER_IMAGE'],
+    names: ['ALEPH_TOOLS_CONTAINER_IMAGE'],
     note: 'Required. Production deploys the Python tools engine as a Cloudflare Container.',
   },
   {
     label: 'API keys secret value',
     required: strictCi,
-    names: ['ALEPH_TOOLS_API_KEYS', 'ALEPH_OCR_API_KEYS'],
+    names: ['ALEPH_TOOLS_API_KEYS'],
     note: 'Set as a Worker secret with wrangler secret put or GitHub Actions secrets.',
   },
   {
