@@ -26,7 +26,7 @@ Error responses:
     "message": "Job result is not ready; current status is processing",
     "httpStatus": 409,
     "requestId": "req_...",
-    "jobId": "ocr_...",
+    "jobId": "job_...",
     "jobStatus": "processing",
     "stage": "ocr",
     "retryable": true,
@@ -44,9 +44,9 @@ External applications should branch on `error.code`, not `message`.
 
 ```json
 {
-  "jobId": "ocr_...",
+  "jobId": "job_...",
   "tool": "ocr",
-  "operation": "image.convert",
+  "operation": "ocr",
   "status": "processing",
   "stage": "ocr",
   "progress": 50,
@@ -110,10 +110,11 @@ Recommended UI behavior:
 OCR async job:
 
 ```bash
-curl -X POST "$BASE_URL/v1/jobs" \
+curl -X POST "$BASE_URL/v1/tools/ocr" \
   -H "Authorization: Bearer $API_KEY" \
   -H "Idempotency-Key: upload-123" \
   -F "file=@document.pdf" \
+  -F "ocrMode=small" \
   -F 'metadata={"documentId":"doc_123"}' \
   -F "callbackUrl=https://app.example/webhooks/aleph-tools"
 ```
@@ -130,7 +131,21 @@ curl -X POST "$BASE_URL/v1/tools/image/convert" \
   -F "width=1600"
 ```
 
-Use `Idempotency-Key` for all create retries. Reusing the same key with a different file, MIME type, size, tool, operation, or conversion options returns `IDEMPOTENCY_CONFLICT`.
+Image compression async job:
+
+```bash
+curl -X POST "$BASE_URL/v1/tools/image/compress" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Idempotency-Key: compress-asset-123" \
+  -F "file=@photo.jpg" \
+  -F "targetSizeBytes=900000" \
+  -F "maxWidth=1600" \
+  -F "outputFormat=jpeg"
+```
+
+Use `Idempotency-Key` for all create retries. Reusing the same key with a different file, MIME type, size, tool, operation, OCR mode, conversion options, or compression options returns `IDEMPOTENCY_CONFLICT`.
+
+Compression is independent from OCR. If an application wants OCR on a compressed image, it should call image compression first, download or retain the compressed binary, then create a separate OCR request with that file.
 
 ## Reading Results
 
@@ -170,7 +185,11 @@ The signature is:
 sha256=<hmac_sha256(WEBHOOK_SIGNING_SECRET, `${timestamp}.${rawBody}`)>
 ```
 
-Ready payloads include `resultUrl`; image conversion ready payloads also include `outputUrl`. Failed and cancelled payloads include a structured `error` object.
+Ready payloads include `resultUrl`; image conversion and compression ready payloads also include `outputUrl`. Failed and cancelled payloads include a structured `error` object.
+
+## Internal Engine Boundary
+
+The OCR/tools engine Container is private. External applications must not call `/internal/*` routes or rely on engine hostnames. In production, the Gateway calls the engine through the Cloudflare Container binding; local development binds the engine only to `127.0.0.1`.
 
 ## Retry Strategy
 

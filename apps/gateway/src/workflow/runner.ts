@@ -1,4 +1,4 @@
-import { ImageConvertOptionsSchema, MAX_PDF_PAGES, PDF_BATCH_SIZE } from '@aleph-tools/shared';
+import { ImageCompressOptionsSchema, ImageConvertOptionsSchema, MAX_PDF_PAGES, PDF_BATCH_SIZE } from '@aleph-tools/shared';
 import {
   claimJobForProcessing,
   claimJobPage,
@@ -13,12 +13,13 @@ import {
   requeueJobForRetry,
   requireStorage,
   setImageConvertResult,
+  setImageCompressResult,
   setJobPageResult,
   setJobResult,
   updateJobProgress,
   type StoredJob,
 } from '../job-store';
-import { convertImage, getPdfInfoFromObject, ocrImage, ocrPdfBatchFromObject } from '../ocr-client';
+import { compressImage, convertImage, getPdfInfoFromObject, ocrImage, ocrPdfBatchFromObject } from '../ocr-client';
 import { maxJobAttempts } from '../config';
 import { deliverDueWebhooks } from '../webhooks';
 import type { Env, StorageEnv, WorkflowStepLike } from '../types';
@@ -47,6 +48,8 @@ export async function runToolWorkflow(env: StorageEnv, jobId: string, step: Work
       const file = new File([bytes], job.document.filename, { type: job.document.mimeType });
       if (job.tool === 'image.convert') {
         await processImageConvertJob(env, step, job, file);
+      } else if (job.tool === 'image.compress') {
+        await processImageCompressJob(env, step, job, file);
       } else {
         await processImageJob(env, step, job, file);
       }
@@ -118,6 +121,21 @@ async function processImageConvertJob(env: StorageEnv, step: WorkflowStepLike, j
     updateJobProgress(env, job, { progress: 90, stage: 'storing_result', currentPage: 0, totalPages: 1 }),
   );
   await step.do(`ready image conversion ${job.jobId}`, async () => setImageConvertResult(env, job, output));
+  await deliverDueWebhooks(env);
+}
+
+async function processImageCompressJob(env: StorageEnv, step: WorkflowStepLike, job: StoredJob, file: File) {
+  const options = ImageCompressOptionsSchema.parse(job.toolOptions ?? {});
+  job = await step.do(`image compress progress ${job.jobId}`, async () =>
+    updateJobProgress(env, job, { progress: 50, stage: 'processing', currentPage: 0, totalPages: 1 }),
+  );
+  await assertNotCancelled(env, job);
+  const output = await step.do(`compress image ${job.jobId}`, async () => compressImage(env, file, options));
+  await assertNotCancelled(env, job);
+  job = await step.do(`store image compression progress ${job.jobId}`, async () =>
+    updateJobProgress(env, job, { progress: 90, stage: 'storing_result', currentPage: 0, totalPages: 1 }),
+  );
+  await step.do(`ready image compression ${job.jobId}`, async () => setImageCompressResult(env, job, output));
   await deliverDueWebhooks(env);
 }
 

@@ -10,9 +10,10 @@ from paddleocr import PaddleOCR
 
 from .timings import elapsed_ms
 
-OcrMode = Literal["fast", "balanced", "accurate"]
-DEFAULT_OCR_MODE: OcrMode = "balanced"
-SUPPORTED_OCR_MODES: tuple[OcrMode, ...] = ("fast", "balanced", "accurate")
+OcrMode = Literal["tiny", "small", "medium"]
+DEFAULT_OCR_MODE: OcrMode = "small"
+FALLBACK_OCR_MODE: OcrMode = "medium"
+SUPPORTED_OCR_MODES: tuple[OcrMode, ...] = ("tiny", "small", "medium")
 
 
 @dataclass(frozen=True)
@@ -52,31 +53,31 @@ class OcrModeConfig:
 
 
 OCR_MODE_CONFIGS: dict[OcrMode, OcrModeConfig] = {
-    "fast": OcrModeConfig(
-        mode="fast",
-        text_detection_model_name="PP-OCRv5_mobile_det",
-        text_recognition_model_name="PP-OCRv5_mobile_rec",
-        max_side=1800,
-        pdf_dpi=150,
+    "tiny": OcrModeConfig(
+        mode="tiny",
+        text_detection_model_name="PP-OCRv6_tiny_det",
+        text_recognition_model_name="PP-OCRv6_tiny_rec",
+        max_side=1600,
+        pdf_dpi=140,
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
         use_textline_orientation=False,
     ),
-    "balanced": OcrModeConfig(
-        mode="balanced",
-        text_detection_model_name="PP-OCRv5_mobile_det",
-        text_recognition_model_name="PP-OCRv5_server_rec",
-        max_side=2200,
-        pdf_dpi=180,
+    "small": OcrModeConfig(
+        mode="small",
+        text_detection_model_name="PP-OCRv6_small_det",
+        text_recognition_model_name="PP-OCRv6_small_rec",
+        max_side=2000,
+        pdf_dpi=170,
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
         use_textline_orientation=False,
     ),
-    "accurate": OcrModeConfig(
-        mode="accurate",
-        text_detection_model_name="PP-OCRv5_server_det",
-        text_recognition_model_name="PP-OCRv5_server_rec",
-        max_side=3200,
+    "medium": OcrModeConfig(
+        mode="medium",
+        text_detection_model_name="PP-OCRv6_medium_det",
+        text_recognition_model_name="PP-OCRv6_medium_rec",
+        max_side=2600,
         pdf_dpi=220,
         use_doc_orientation_classify=True,
         use_doc_unwarping=True,
@@ -95,7 +96,7 @@ _MODEL_INIT_MS: dict[OcrMode, float] = {}
 def normalize_ocr_mode(mode: str | None) -> OcrMode:
     value = (mode or DEFAULT_OCR_MODE).strip().lower()
     if value not in OCR_MODE_CONFIGS:
-        raise ValueError("mode must be one of fast, balanced, accurate")
+        raise ValueError("mode must be one of tiny, small, medium")
     return value  # type: ignore[return-value]
 
 

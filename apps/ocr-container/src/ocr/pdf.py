@@ -9,7 +9,7 @@ import fitz
 
 from .constants import MAX_PDF_PAGES, PDF_BATCH_SIZE
 from .image import ocr_image_path_once
-from .modes import DEFAULT_OCR_MODE, OCR_MODE_CONFIGS, OcrMode, normalize_ocr_mode
+from .modes import DEFAULT_OCR_MODE, FALLBACK_OCR_MODE, OCR_MODE_CONFIGS, OcrMode, normalize_ocr_mode
 from .quality import aggregate_pdf_quality, evaluate_quality, quality_with_fallback_reasons
 from .result_builder import attach_ocr_metadata, build_result
 from .timings import add_timings, add_timings_in_place, elapsed_ms, empty_timings, finish_aggregate_timings
@@ -110,7 +110,7 @@ def ocr_pdf_document_range_with_fallback(
 
     quality = aggregate_pdf_quality(pages)
     result = build_result(filename, mime_type, "pdf", pages)
-    final_mode: OcrMode = "accurate" if fallback_used else requested_mode
+    final_mode: OcrMode = FALLBACK_OCR_MODE if fallback_used else requested_mode
     attach_ocr_metadata(
         result,
         ocr_mode=final_mode,
@@ -136,9 +136,9 @@ def ocr_pdf_page_document_with_fallback(doc: fitz.Document, filename: str, page_
     page_path = render_pdf_page(doc, page_index, tmpdir, requested_mode)
     first = ocr_image_path_once(page_path, f"{filename}#page={page_index + 1}", "image/png", page_index, "pdf", requested_mode, tmpdir)
     first_quality = evaluate_quality(first["pages"])
-    if requested_mode != "accurate" and first_quality["lowQuality"]:
-        accurate_page_path = render_pdf_page(doc, page_index, tmpdir, "accurate")
-        second = ocr_image_path_once(accurate_page_path, f"{filename}#page={page_index + 1}", "image/png", page_index, "pdf", "accurate", tmpdir)
+    if requested_mode != FALLBACK_OCR_MODE and first_quality["lowQuality"]:
+        fallback_page_path = render_pdf_page(doc, page_index, tmpdir, FALLBACK_OCR_MODE)
+        second = ocr_image_path_once(fallback_page_path, f"{filename}#page={page_index + 1}", "image/png", page_index, "pdf", FALLBACK_OCR_MODE, tmpdir)
         second_quality = evaluate_quality(second["pages"])
         timings = add_timings(first["timingsMs"], second["timingsMs"])
         timings["requestedTotal"] = first["timingsMs"]["total"]
@@ -146,7 +146,7 @@ def ocr_pdf_page_document_with_fallback(doc: fitz.Document, filename: str, page_
         timings["total"] = elapsed_ms(started)
         attach_ocr_metadata(
             second,
-            ocr_mode="accurate",
+            ocr_mode=FALLBACK_OCR_MODE,
             requested_ocr_mode=requested_mode,
             fallback_used=True,
             quality=quality_with_fallback_reasons(second_quality, first_quality),

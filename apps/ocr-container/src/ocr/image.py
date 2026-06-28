@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .modes import DEFAULT_OCR_MODE, OcrMode, get_ocr, model_init_ms_for_request, normalize_ocr_mode
+from .modes import DEFAULT_OCR_MODE, FALLBACK_OCR_MODE, OcrMode, get_ocr, model_init_ms_for_request, normalize_ocr_mode
 from .normalize import normalize_blocks
 from .preprocess import preprocess_image_path
 from .quality import evaluate_quality, quality_with_fallback_reasons
@@ -43,8 +43,8 @@ def ocr_image_path_with_fallback(
     started = time.perf_counter()
     first = ocr_image_path_once(image_path, filename, mime_type, page_index, document_type, requested_mode, tmpdir)
     first_quality = evaluate_quality(first["pages"])
-    if requested_mode != "accurate" and first_quality["lowQuality"]:
-        second = ocr_image_path_once(image_path, filename, mime_type, page_index, document_type, "accurate", tmpdir)
+    if requested_mode != FALLBACK_OCR_MODE and first_quality["lowQuality"]:
+        second = ocr_image_path_once(image_path, filename, mime_type, page_index, document_type, FALLBACK_OCR_MODE, tmpdir)
         second_quality = evaluate_quality(second["pages"])
         timings = add_timings(first["timingsMs"], second["timingsMs"])
         timings["requestedTotal"] = first["timingsMs"]["total"]
@@ -52,7 +52,7 @@ def ocr_image_path_with_fallback(
         timings["total"] = elapsed_ms(started)
         attach_ocr_metadata(
             second,
-            ocr_mode="accurate",
+            ocr_mode=FALLBACK_OCR_MODE,
             requested_ocr_mode=requested_mode,
             fallback_used=True,
             quality=quality_with_fallback_reasons(second_quality, first_quality),

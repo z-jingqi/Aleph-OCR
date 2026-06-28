@@ -5,6 +5,7 @@ import { ToolsEngineContainer } from './container';
 import { requestIdMiddleware } from './http/request-id';
 import { requireStorage } from './job-store';
 import { runScheduledMaintenance } from './maintenance';
+import { registerImageCompressRoutes } from './routes/image-compress';
 import { registerImageConvertRoutes } from './routes/image-convert';
 import { registerJobRoutes } from './routes/jobs';
 import { registerOcrRoutes } from './routes/ocr';
@@ -19,6 +20,7 @@ registerSystemRoutes(app);
 app.use('/v1/*', requireApiKey());
 registerOcrRoutes(app);
 registerImageConvertRoutes(app);
+registerImageCompressRoutes(app);
 registerJobRoutes(app);
 
 export { ToolsEngineContainer };
@@ -48,7 +50,5 @@ export class ToolJobWorkflow extends WorkflowEntrypoint<Env, ToolWorkflowParams>
     await runToolWorkflow(this.env, event.payload.jobId, step);
   }
 }
-
-export class OcrJobWorkflow extends ToolJobWorkflow {}
 
 export { processJob, runToolWorkflow };

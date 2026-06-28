@@ -9,7 +9,7 @@ import type { StoredJob } from '../job-store';
 
 export function ocrModeForJob(job: StoredJob): OcrMode {
   const parsed = OcrModeSchema.safeParse(job.toolOptions?.ocrMode);
-  return parsed.success ? parsed.data : 'balanced';
+  return parsed.success ? parsed.data : 'small';
 }
 
 export function withRequestedOcrModeMetadata(result: OcrResult, requestedOcrMode: OcrMode): OcrResult {
@@ -50,7 +50,7 @@ export function normalizePageResult(result: OcrResult, pageIndex: number): OcrPa
 export function buildPdfResult(job: StoredJob, pages: OcrPage[]): OcrResult {
   const requestedOcrMode = ocrModeForJob(job);
   const fallbackUsed = pages.some((page) => page.fallbackUsed || (page.ocrMode && page.ocrMode !== requestedOcrMode));
-  const ocrMode: OcrMode = fallbackUsed ? 'accurate' : requestedOcrMode;
+  const ocrMode: OcrMode = fallbackUsed ? 'medium' : requestedOcrMode;
   const quality = buildOcrQuality(pages);
   const timingsMs = aggregateOcrTimings(pages);
   const plainText = pages.map((page) => page.text).filter(Boolean).join('\n\n');

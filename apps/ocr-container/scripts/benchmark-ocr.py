@@ -24,11 +24,11 @@ IMAGE_MIME_BY_SUFFIX = {
     ".heic": "image/heic",
     ".heif": "image/heif",
 }
-MODE_CHOICES = ("fast", "balanced", "accurate")
+MODE_CHOICES = ("tiny", "small", "medium")
 REQUIRED_MODEL_NAMES_BY_MODE = {
-    "fast": ("PP-OCRv5_mobile_det", "PP-OCRv5_mobile_rec"),
-    "balanced": ("PP-OCRv5_mobile_det", "PP-OCRv5_server_rec"),
-    "accurate": ("PP-OCRv5_server_det", "PP-OCRv5_server_rec", "PP-LCNet_x1_0_doc_ori", "UVDoc", "PP-LCNet_x1_0_textline_ori"),
+    "tiny": ("PP-OCRv6_tiny_det", "PP-OCRv6_tiny_rec"),
+    "small": ("PP-OCRv6_small_det", "PP-OCRv6_small_rec"),
+    "medium": ("PP-OCRv6_medium_det", "PP-OCRv6_medium_rec", "PP-LCNet_x1_0_doc_ori", "UVDoc", "PP-LCNet_x1_0_textline_ori"),
 }
 
 
@@ -186,30 +186,30 @@ def import_engine() -> Any:
     container_root = repo_root() / "apps" / "ocr-container"
     sys.path.insert(0, str(container_root))
     try:
-        from src import ocr_engine
+        from src import ocr
     except ModuleNotFoundError as error:
         raise RuntimeError(
             f"Missing Python dependency while importing OCR engine: {error}. "
             "Install apps/ocr-container/requirements.txt and prefetch models before running the benchmark."
         ) from error
-    return ocr_engine
+    return ocr
 
 
-def clear_engine_cache(ocr_engine: Any) -> None:
-    cache_clear = getattr(getattr(ocr_engine, "get_ocr", None), "cache_clear", None)
+def clear_engine_cache(engine_module: Any) -> None:
+    cache_clear = getattr(getattr(engine_module, "get_ocr", None), "cache_clear", None)
     if callable(cache_clear):
         cache_clear()
 
 
-def run_fixture(ocr_engine: Any, fixture: Fixture, mode: str, warm_runs: int) -> BenchmarkRecord:
-    fallback = "auto-accurate-enabled" if mode in {"fast", "balanced"} else "disabled-for-accurate"
+def run_fixture(engine_module: Any, fixture: Fixture, mode: str, warm_runs: int) -> BenchmarkRecord:
+    fallback = "auto-medium-enabled" if mode in {"tiny", "small"} else "disabled-for-medium"
     try:
-        clear_engine_cache(ocr_engine)
-        cold_ms, cold_result = timed(lambda: run_ocr(ocr_engine, fixture, mode))
+        clear_engine_cache(engine_module)
+        cold_ms, cold_result = timed(lambda: run_ocr(engine_module, fixture, mode))
         warm_measurements: list[float] = []
         warm_result = cold_result
         for _ in range(warm_runs):
-            elapsed_ms, warm_result = timed(lambda: run_ocr(ocr_engine, fixture, mode))
+            elapsed_ms, warm_result = timed(lambda: run_ocr(engine_module, fixture, mode))
             warm_measurements.append(elapsed_ms)
         summary = summarize_result(warm_result)
         fallback = "used" if warm_result.get("fallbackUsed") else "not-used"
@@ -245,11 +245,11 @@ def run_fixture(ocr_engine: Any, fixture: Fixture, mode: str, warm_runs: int) ->
         )
 
 
-def run_ocr(ocr_engine: Any, fixture: Fixture, mode: str) -> dict[str, Any]:
+def run_ocr(engine_module: Any, fixture: Fixture, mode: str) -> dict[str, Any]:
     content = fixture.path.read_bytes()
     if fixture.mime_type == "application/pdf":
-        return ocr_engine.ocr_pdf_bytes(content, fixture.path.name, fixture.mime_type, mode=mode)
-    return ocr_engine.ocr_image_bytes(content, fixture.path.name, fixture.mime_type, mode=mode)
+        return engine_module.ocr_pdf_bytes(content, fixture.path.name, fixture.mime_type, mode=mode)
+    return engine_module.ocr_image_bytes(content, fixture.path.name, fixture.mime_type, mode=mode)
 
 
 def timed(callback: Callable[[], dict[str, Any]]) -> tuple[float, dict[str, Any]]:
@@ -348,7 +348,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run a local OCR benchmark against repository fixtures by calling the Python OCR engine directly.",
     )
-    parser.add_argument("--mode", choices=MODE_CHOICES, default="balanced", help="OCR mode label to record. Default: balanced.")
+    parser.add_argument("--mode", choices=MODE_CHOICES, default="small", help="OCR mode label to record. Default: small.")
     parser.add_argument("--format", choices=("table", "json", "ndjson"), default="table", help="Output format. Default: table.")
     parser.add_argument("--output", type=Path, help="Optional JSON file path for the complete benchmark payload.")
     parser.add_argument("--warm-runs", type=int, default=1, help="Warm repetitions per fixture after the cold run. Default: 1.")
@@ -393,7 +393,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        ocr_engine = import_engine()
+        engine_module = import_engine()
     except RuntimeError as error:
         records = skipped_records(fixtures, args.mode, "dependency-missing", str(error))
         payload = benchmark_payload(args, records, model_present, model_path, checked_paths, missing_models)
@@ -401,7 +401,7 @@ def main(argv: list[str] | None = None) -> int:
         print(str(error), file=sys.stderr)
         return 2
 
-    records = [run_fixture(ocr_engine, fixture, args.mode, args.warm_runs) for fixture in fixtures]
+    records = [run_fixture(engine_module, fixture, args.mode, args.warm_runs) for fixture in fixtures]
     payload = benchmark_payload(args, records, model_present, model_path, checked_paths, missing_models)
     emit(args, payload, records)
     return 1 if any(record.status == "failed" for record in records) else 0

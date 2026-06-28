@@ -5,8 +5,8 @@ import os
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
-from .image_tools import SUPPORTED_INPUT_TYPES, convert_image_bytes
-from .ocr_engine import DEFAULT_OCR_MODE, engine_info, get_ocr, ocr_image_bytes, ocr_pdf_batch_bytes, ocr_pdf_bytes, ocr_pdf_page_bytes, pdf_info_bytes
+from .image_tools import SUPPORTED_INPUT_TYPES, compress_image_bytes, convert_image_bytes
+from .ocr import DEFAULT_OCR_MODE, engine_info, get_ocr, ocr_image_bytes, ocr_pdf_batch_bytes, pdf_info_bytes
 
 app = FastAPI(title="Aleph Tools Engine", version="0.1.0")
 
@@ -30,9 +30,8 @@ async def ocr_image(
     file: UploadFile = File(...),
     mode: str = Query(default=DEFAULT_OCR_MODE),
     x_aleph_tools_internal_token: str | None = Header(default=None),
-    x_aleph_ocr_internal_token: str | None = Header(default=None),
 ):
-    check_internal_token(x_aleph_tools_internal_token or x_aleph_ocr_internal_token)
+    check_internal_token(x_aleph_tools_internal_token)
     if file.content_type not in SUPPORTED_IMAGE_TYPES:
         raise HTTPException(status_code=400, detail=f"Unsupported image type: {file.content_type}")
     content = await file.read()
@@ -53,9 +52,8 @@ async def image_convert(
     height: int | None = Form(default=None),
     fit: str = Form(default="inside"),
     x_aleph_tools_internal_token: str | None = Header(default=None),
-    x_aleph_ocr_internal_token: str | None = Header(default=None),
 ):
-    check_internal_token(x_aleph_tools_internal_token or x_aleph_ocr_internal_token)
+    check_internal_token(x_aleph_tools_internal_token)
     if file.content_type not in SUPPORTED_IMAGE_TYPES:
         raise HTTPException(status_code=400, detail=f"Unsupported image type: {file.content_type}")
     content = await file.read()
@@ -88,21 +86,52 @@ async def image_convert(
     )
 
 
-@app.post("/internal/ocr/pdf")
-async def ocr_pdf(
+@app.post("/internal/image/compress")
+async def image_compress(
     file: UploadFile = File(...),
-    mode: str = Query(default=DEFAULT_OCR_MODE),
+    target_size_bytes: int | None = Form(default=None),
+    max_width: int | None = Form(default=None),
+    max_height: int | None = Form(default=None),
+    min_quality: int = Form(default=45),
+    max_quality: int = Form(default=85),
+    output_format: str = Form(default="jpeg"),
     x_aleph_tools_internal_token: str | None = Header(default=None),
-    x_aleph_ocr_internal_token: str | None = Header(default=None),
 ):
-    check_internal_token(x_aleph_tools_internal_token or x_aleph_ocr_internal_token)
-    if file.content_type != "application/pdf":
-        raise HTTPException(status_code=400, detail=f"Unsupported PDF type: {file.content_type}")
+    check_internal_token(x_aleph_tools_internal_token)
+    if file.content_type not in SUPPORTED_IMAGE_TYPES:
+        raise HTTPException(status_code=400, detail=f"Unsupported image type: {file.content_type}")
     content = await file.read()
     try:
-        return JSONResponse(ocr_pdf_bytes(content, file.filename or "document.pdf", file.content_type, mode))
+        compressed, metadata = compress_image_bytes(
+            content,
+            file.filename or "image",
+            file.content_type or "image/png",
+            target_size_bytes=target_size_bytes,
+            max_width=max_width,
+            max_height=max_height,
+            min_quality=min_quality,
+            max_quality=max_quality,
+            output_format=output_format,
+        )
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        status = 501 if "is not supported by this container image" in str(error) else 400
+        raise HTTPException(status_code=status, detail=str(error)) from error
+
+    headers = {
+        "Content-Disposition": f'attachment; filename="{metadata["filename"]}"',
+        "X-Aleph-Tools-Filename": metadata["filename"],
+        "X-Aleph-Tools-Width": str(metadata["width"]),
+        "X-Aleph-Tools-Height": str(metadata["height"]),
+        "X-Aleph-Tools-Format": metadata["format"],
+        "X-Aleph-Tools-Size-Bytes": str(metadata["sizeBytes"]),
+        "X-Aleph-Tools-Original-Size-Bytes": str(metadata["originalSizeBytes"]),
+        "X-Aleph-Tools-Compression-Ratio": str(metadata["compressionRatio"]),
+        "X-Aleph-Tools-Target-Met": str(metadata["targetMet"]).lower(),
+        "X-Aleph-Tools-Quality": str(metadata["quality"]),
+    }
+    if metadata.get("targetSizeBytes") is not None:
+        headers["X-Aleph-Tools-Target-Size-Bytes"] = str(metadata["targetSizeBytes"])
+    return Response(compressed, media_type=metadata["mimeType"], headers=headers)
 
 
 @app.post("/internal/ocr/pdf-info")
@@ -111,30 +140,11 @@ async def pdf_info(
     file: UploadFile | None = File(default=None),
     filename: str | None = Query(default=None),
     x_aleph_tools_internal_token: str | None = Header(default=None),
-    x_aleph_ocr_internal_token: str | None = Header(default=None),
 ):
-    check_internal_token(x_aleph_tools_internal_token or x_aleph_ocr_internal_token)
+    check_internal_token(x_aleph_tools_internal_token)
     content, resolved_filename = await read_pdf_payload(request, file, filename)
     try:
         return JSONResponse(pdf_info_bytes(content, resolved_filename))
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-
-
-@app.post("/internal/ocr/pdf-page")
-async def ocr_pdf_page(
-    page_index: int = 0,
-    file: UploadFile = File(...),
-    mode: str = Query(default=DEFAULT_OCR_MODE),
-    x_aleph_tools_internal_token: str | None = Header(default=None),
-    x_aleph_ocr_internal_token: str | None = Header(default=None),
-):
-    check_internal_token(x_aleph_tools_internal_token or x_aleph_ocr_internal_token)
-    if file.content_type != "application/pdf":
-        raise HTTPException(status_code=400, detail=f"Unsupported PDF type: {file.content_type}")
-    content = await file.read()
-    try:
-        return JSONResponse(ocr_pdf_page_bytes(content, file.filename or "document.pdf", page_index, mode))
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -148,9 +158,8 @@ async def ocr_pdf_batch(
     filename: str | None = Query(default=None),
     file: UploadFile | None = File(default=None),
     x_aleph_tools_internal_token: str | None = Header(default=None),
-    x_aleph_ocr_internal_token: str | None = Header(default=None),
 ):
-    check_internal_token(x_aleph_tools_internal_token or x_aleph_ocr_internal_token)
+    check_internal_token(x_aleph_tools_internal_token)
     content, resolved_filename = await read_pdf_payload(request, file, filename)
     try:
         return JSONResponse(ocr_pdf_batch_bytes(content, resolved_filename, "application/pdf", start_page, page_count, mode))

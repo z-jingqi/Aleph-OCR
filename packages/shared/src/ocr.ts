@@ -2,10 +2,10 @@ import { z } from 'zod';
 import { OcrDocumentSchema } from './documents';
 import { JobStatusSchema } from './jobs';
 
-export const OcrModeValues = ['fast', 'balanced', 'accurate'] as const;
-export const OcrModeSchema = z.enum(OcrModeValues).default('balanced');
+export const OcrModeValues = ['tiny', 'small', 'medium'] as const;
+export const OcrModeSchema = z.enum(OcrModeValues).default('small');
 export type OcrMode = z.infer<typeof OcrModeSchema>;
-export const DEFAULT_OCR_MODE: OcrMode = 'balanced';
+export const DEFAULT_OCR_MODE: OcrMode = 'small';
 
 export const OcrBlockSchema = z.object({
   text: z.string(),

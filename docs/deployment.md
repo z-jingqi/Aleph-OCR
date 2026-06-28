@@ -20,6 +20,8 @@ pnpm deploy:check:ci:prod
 
 `deploy:check:*` verifies only local environment variables. It does not call Cloudflare.
 
+Before deploying to dev, run the local checks in [Local Testing](./local-testing.md), including the `linux/amd64` tools container E2E path.
+
 ## Resource Layout
 
 Recommended names:
@@ -66,11 +68,11 @@ export ALEPH_TOOLS_QUEUE_PROD="aleph-tools-jobs-prod"
 export ALEPH_TOOLS_DOMAIN_PROD="tools.aleph-cat.com"
 ```
 
-The Gateway invokes the Python tools engine through an internal Cloudflare Container Durable Object binding. The engine does not need a public URL, and `ALEPH_TOOLS_ENGINE_URL_DEV/PROD` are not part of the Cloudflare deployment path. Local development still uses `apps/gateway/wrangler.local.jsonc` to reach `http://127.0.0.1:8090`.
+The Gateway invokes the Python tools engine through an internal Cloudflare Container Durable Object binding. The engine must not be assigned a public route or custom domain. `ALEPH_TOOLS_ENGINE_URL_DEV/PROD` are not part of the Cloudflare deployment path. Local development still uses `apps/gateway/wrangler.local.jsonc` to reach `http://127.0.0.1:8090`.
 
 ## Tools Container Model Cache
 
-The production container image should include predownloaded PaddleOCR models. Runtime requests should not be responsible for model resolution or download.
+The production container image should be built for `linux/amd64` and include predownloaded PaddleOCR models. Runtime requests should not be responsible for model resolution or download.
 
 Set the PaddleX model-source flag in the image build environment. `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True` disables the runtime model source connectivity check.
 
@@ -79,7 +81,13 @@ cd apps/ocr-container
 PADDLEOCR_HOME=/models/paddleocr PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True scripts/download-models.sh
 ```
 
-Before promoting an image, run the local benchmark inside the same image or machine class and confirm that the model cache is present and default `balanced` fixtures do not fall back. See [OCR Performance Benchmarking](./benchmark/ocr-performance.md) for the benchmark command, cold/warm interpretation, modes, fallback semantics, and performance acceptance gates.
+Build local and production OCR images with an explicit platform:
+
+```bash
+docker build --platform linux/amd64 -t aleph-tools-container:amd64-test apps/ocr-container
+```
+
+Before promoting an image, run the local benchmark inside the same image or machine class and confirm that the model cache is present and default `small` fixtures do not fall back unexpectedly. See [OCR Performance Benchmarking](./benchmark/ocr-performance.md) for the benchmark command, cold/warm interpretation, modes, fallback semantics, and performance acceptance gates.
 
 ## Worker Secrets
 
@@ -183,10 +191,23 @@ curl -N "$BASE_URL/v1/jobs/<job-id>/events" -H "Authorization: Bearer $API_KEY"
 OCR smoke test:
 
 ```bash
-curl -sS -X POST "$BASE_URL/v1/jobs" \
+curl -sS -X POST "$BASE_URL/v1/tools/ocr" \
   -H "Authorization: Bearer $API_KEY" \
   -H "Idempotency-Key: smoke-ocr-001" \
-  -F "file=@apps/gateway/test/fixtures/pdfs/receipt-single-page.pdf"
+  -F "file=@apps/gateway/test/fixtures/pdfs/receipt-single-page.pdf" \
+  -F "ocrMode=small"
+```
+
+Image compression smoke test:
+
+```bash
+curl -sS -X POST "$BASE_URL/v1/tools/image/compress" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Idempotency-Key: smoke-image-compress-001" \
+  -F "file=@apps/gateway/test/fixtures/images/receipt.png" \
+  -F "outputFormat=jpeg" \
+  -F "maxWidth=700" \
+  -F "targetSizeBytes=70000"
 ```
 
 ## Rollback
@@ -198,7 +219,7 @@ pnpm --dir apps/gateway exec wrangler versions list --config wrangler.generated-
 pnpm --dir apps/gateway exec wrangler rollback --config wrangler.generated-prod.json
 ```
 
-D1 migrations are forward-only in normal operation. If a deployment needs to be backed out, roll back Worker code first and leave compatible additive columns/tables in place.
+This branch uses a clean `tool_jobs` schema and does not migrate legacy OCR tables. Create fresh dev/prod D1 databases or reset the existing databases before deployment. If a deployment needs to be backed out, roll back Worker code and restore the matching D1 snapshot for that release.
 
 ## Production Notes
 
@@ -207,3 +228,4 @@ D1 migrations are forward-only in normal operation. If a deployment needs to be 
 - Treat `data.status`, `data.terminal`, `data.resultAvailable`, `data.outputAvailable`, and `error.code` as the external integration contract.
 - Webhook delivery failure never rolls back a completed job. Use the delivery retry path and the polling fallback endpoints for recovery.
 - The production target is PDFs up to 100 pages and single-image conversion jobs.
+- OCR container images should be promoted only after an amd64 image completes image and PDF OCR smoke tests with predownloaded PP-OCRv6 models.

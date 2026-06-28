@@ -8,7 +8,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.image_tools import convert_image_bytes  # noqa: E402
+from src.image_tools import compress_image_bytes, convert_image_bytes  # noqa: E402
 
 
 def make_png(mode: str = "RGBA") -> bytes:
@@ -59,11 +59,39 @@ def test_heic_fixture_to_jpeg() -> None:
     assert image.width <= 1200
 
 
+def test_compress_resizes_and_targets_size() -> None:
+    source = make_png("RGB")
+    data, metadata = compress_image_bytes(
+        source,
+        "receipt.png",
+        "image/png",
+        target_size_bytes=900,
+        max_width=30,
+        max_height=30,
+        min_quality=20,
+        max_quality=80,
+        output_format="jpeg",
+    )
+    image = inspect_image(data)
+    assert metadata["filename"] == "receipt.compressed.jpg"
+    assert metadata["mimeType"] == "image/jpeg"
+    assert metadata["originalSizeBytes"] == len(source)
+    assert metadata["sizeBytes"] == len(data)
+    assert metadata["width"] <= 30
+    assert metadata["height"] <= 30
+    assert metadata["format"] == "jpeg"
+    assert 20 <= metadata["quality"] <= 80
+    assert metadata["targetSizeBytes"] == 900
+    assert metadata["targetMet"] == (len(data) <= 900)
+    assert image.mode == "RGB"
+
+
 def main() -> None:
     test_png_to_webp_resize()
     test_transparent_png_to_jpeg()
     test_cover_resize()
     test_heic_fixture_to_jpeg()
+    test_compress_resizes_and_targets_size()
 
 
 if __name__ == "__main__":

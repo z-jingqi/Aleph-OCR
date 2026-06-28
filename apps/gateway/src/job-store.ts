@@ -22,6 +22,7 @@ export {
   requeueJobForRetry,
   requestJobCancel,
   resetExpiredProcessingJobs,
+  setImageCompressResult,
   setImageConvertResult,
   setJobPageResult,
   setJobResult,

@@ -31,7 +31,11 @@ if "fitz" not in sys.modules:
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src import ocr_engine  # noqa: E402
+from src.ocr import clear_ocr_cache, engine_info, get_ocr, ocr_image_bytes, ocr_pdf_batch_bytes  # noqa: E402
+from src.ocr import modes as ocr_modes  # noqa: E402
+from src.ocr import pdf as ocr_pdf  # noqa: E402
+from src.ocr.preprocess import preprocess_image_for_ocr  # noqa: E402
+from src.ocr.quality import evaluate_ocr_quality  # noqa: E402
 
 
 def make_line(text: str, confidence: float) -> list[Any]:
@@ -93,24 +97,24 @@ def test_mode_config_and_cache() -> None:
         def ocr(self, path: str) -> list[Any]:
             return []
 
-    ocr_engine.PaddleOCR = FakePaddleOCR
-    ocr_engine.clear_ocr_cache()
+    ocr_modes.PaddleOCR = FakePaddleOCR
+    clear_ocr_cache()
 
-    fast_a = ocr_engine.get_ocr("FAST")
-    fast_b = ocr_engine.get_ocr("fast")
-    balanced = ocr_engine.get_ocr("balanced")
-    accurate = ocr_engine.get_ocr("accurate")
+    tiny_a = get_ocr("TINY")
+    tiny_b = get_ocr("tiny")
+    small = get_ocr("small")
+    medium = get_ocr("medium")
 
-    assert fast_a is fast_b
-    assert balanced is not fast_a
-    assert accurate is not balanced
-    assert created[0]["text_detection_model_name"] == "PP-OCRv5_mobile_det"
-    assert created[0]["text_recognition_model_name"] == "PP-OCRv5_mobile_rec"
+    assert tiny_a is tiny_b
+    assert small is not tiny_a
+    assert medium is not small
+    assert created[0]["text_detection_model_name"] == "PP-OCRv6_tiny_det"
+    assert created[0]["text_recognition_model_name"] == "PP-OCRv6_tiny_rec"
     assert created[0]["use_doc_orientation_classify"] is False
-    assert created[1]["text_detection_model_name"] == "PP-OCRv5_mobile_det"
-    assert created[1]["text_recognition_model_name"] == "PP-OCRv5_server_rec"
-    assert created[2]["text_detection_model_name"] == "PP-OCRv5_server_det"
-    assert created[2]["text_recognition_model_name"] == "PP-OCRv5_server_rec"
+    assert created[1]["text_detection_model_name"] == "PP-OCRv6_small_det"
+    assert created[1]["text_recognition_model_name"] == "PP-OCRv6_small_rec"
+    assert created[2]["text_detection_model_name"] == "PP-OCRv6_medium_det"
+    assert created[2]["text_recognition_model_name"] == "PP-OCRv6_medium_rec"
     assert created[2]["use_doc_orientation_classify"] is True
     assert created[2]["use_doc_unwarping"] is True
     assert created[2]["use_textline_orientation"] is True
@@ -120,30 +124,30 @@ def test_preprocess_scales_and_normalizes_rgb() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         source = Path(tmpdir) / "large.png"
         source.write_bytes(make_png(width=2400, height=1200, mode="RGBA"))
-        preprocessed = ocr_engine.preprocess_image_for_ocr(source, Path(tmpdir), ocr_engine.MODE_CONFIGS["fast"])
+        preprocessed = preprocess_image_for_ocr(source, Path(tmpdir), ocr_modes.MODE_CONFIGS["tiny"])
 
         with Image.open(preprocessed.path) as image:
             assert image.mode == "RGB"
-            assert image.size == (1800, 900)
+            assert image.size == (1600, 800)
 
         assert preprocessed.width == 2400
         assert preprocessed.height == 1200
-        assert preprocessed.preprocessed_width == 1800
-        assert preprocessed.preprocessed_height == 900
+        assert preprocessed.preprocessed_width == 1600
+        assert preprocessed.preprocessed_height == 800
 
 
 def test_quality_heuristics() -> None:
-    empty_quality = ocr_engine.evaluate_ocr_quality([])
+    empty_quality = evaluate_ocr_quality([])
     assert empty_quality["fallbackReasons"] == ["no_blocks", "short_text"]
 
-    low_confidence = ocr_engine.evaluate_ocr_quality([{"text": "abcdefghijklmnopqrstuvwxyz", "confidence": 0.5}])
+    low_confidence = evaluate_ocr_quality([{"text": "abcdefghijklmnopqrstuvwxyz", "confidence": 0.5}])
     assert "low_confidence" in low_confidence["fallbackReasons"]
 
-    numeric_table = ocr_engine.evaluate_ocr_quality([{"text": "12|34|56|78", "confidence": 0.95}])
+    numeric_table = evaluate_ocr_quality([{"text": "12|34|56|78", "confidence": 0.95}])
     assert "short_numeric_table" in numeric_table["fallbackReasons"]
 
 
-def test_image_ocr_falls_back_to_accurate_once() -> None:
+def test_image_ocr_falls_back_to_medium_once() -> None:
     calls: list[str] = []
 
     class FakePaddleOCR:
@@ -152,22 +156,22 @@ def test_image_ocr_falls_back_to_accurate_once() -> None:
 
         def ocr(self, path: str) -> list[Any]:
             calls.append(self.det_model)
-            if self.det_model == "PP-OCRv5_mobile_det":
+            if self.det_model == "PP-OCRv6_tiny_det":
                 return [[make_line("12|34", 0.7)]]
-            return [[make_line("accurate fallback produced enough recognized text 1234567890", 0.96)]]
+            return [[make_line("medium fallback produced enough recognized text 1234567890", 0.96)]]
 
-    ocr_engine.PaddleOCR = FakePaddleOCR
-    ocr_engine.clear_ocr_cache()
+    ocr_modes.PaddleOCR = FakePaddleOCR
+    clear_ocr_cache()
 
-    result = ocr_engine.ocr_image_bytes(make_png(), "sample.png", "image/png", mode="fast")
+    result = ocr_image_bytes(make_png(), "sample.png", "image/png", mode="tiny")
 
-    assert calls == ["PP-OCRv5_mobile_det", "PP-OCRv5_server_det"]
-    assert result["requestedOcrMode"] == "fast"
-    assert result["ocrMode"] == "accurate"
+    assert calls == ["PP-OCRv6_tiny_det", "PP-OCRv6_medium_det"]
+    assert result["requestedOcrMode"] == "tiny"
+    assert result["ocrMode"] == "medium"
     assert result["fallbackUsed"] is True
     assert result["quality"]["fallbackReasons"]
-    assert result["pages"][0]["ocrMode"] == "accurate"
-    assert result["pages"][0]["preprocessedWidth"] <= ocr_engine.MODE_CONFIGS["accurate"].preprocess_max_side
+    assert result["pages"][0]["ocrMode"] == "medium"
+    assert result["pages"][0]["preprocessedWidth"] <= ocr_modes.MODE_CONFIGS["medium"].preprocess_max_side
     assert result["timingsMs"]["ocr"] >= 0
 
 
@@ -179,23 +183,23 @@ def test_pdf_batch_uses_mode_dpi_and_page_range() -> None:
             pass
 
         def ocr(self, path: str) -> list[Any]:
-            return [[make_line("balanced page recognized text with enough content 1234567890", 0.96)]]
+            return [[make_line("small page recognized text with enough content 1234567890", 0.96)]]
 
-    ocr_engine.PaddleOCR = FakePaddleOCR
-    ocr_engine.clear_ocr_cache()
-    ocr_engine.fitz.open = lambda *_args, **_kwargs: FakePdfDoc(page_count=4, rendered_dpis=rendered_dpis)
+    ocr_modes.PaddleOCR = FakePaddleOCR
+    clear_ocr_cache()
+    ocr_pdf.fitz.open = lambda *_args, **_kwargs: FakePdfDoc(page_count=4, rendered_dpis=rendered_dpis)
 
-    result = ocr_engine.ocr_pdf_batch_bytes(b"%PDF", "sample.pdf", "application/pdf", start_page=1, page_count=2, mode="balanced")
+    result = ocr_pdf_batch_bytes(b"%PDF", "sample.pdf", "application/pdf", start_page=1, page_count=2, mode="small")
 
     assert [page["pageIndex"] for page in result["pages"]] == [1, 2]
-    assert rendered_dpis == [180, 180]
-    assert result["requestedOcrMode"] == "balanced"
+    assert rendered_dpis == [170, 170]
+    assert result["requestedOcrMode"] == "small"
     assert result["fallbackUsed"] is False
     assert result["pages"][0]["quality"]["fallbackReasons"] == []
-    assert result["pages"][0]["preprocessedWidth"] <= ocr_engine.MODE_CONFIGS["balanced"].preprocess_max_side
+    assert result["pages"][0]["preprocessedWidth"] <= ocr_modes.MODE_CONFIGS["small"].preprocess_max_side
 
 
-def test_pdf_page_fallback_rerenders_with_accurate_dpi() -> None:
+def test_pdf_page_fallback_rerenders_with_medium_dpi() -> None:
     rendered_dpis: list[int] = []
     calls: list[str] = []
 
@@ -205,18 +209,18 @@ def test_pdf_page_fallback_rerenders_with_accurate_dpi() -> None:
 
         def ocr(self, path: str) -> list[Any]:
             calls.append(self.det_model)
-            if self.det_model == "PP-OCRv5_mobile_det":
+            if self.det_model == "PP-OCRv6_tiny_det":
                 return [[make_line("12|34", 0.7)]]
-            return [[make_line("accurate PDF fallback produced enough recognized text 1234567890", 0.96)]]
+            return [[make_line("medium PDF fallback produced enough recognized text 1234567890", 0.96)]]
 
-    ocr_engine.PaddleOCR = FakePaddleOCR
-    ocr_engine.clear_ocr_cache()
-    ocr_engine.fitz.open = lambda *_args, **_kwargs: FakePdfDoc(page_count=1, rendered_dpis=rendered_dpis)
+    ocr_modes.PaddleOCR = FakePaddleOCR
+    clear_ocr_cache()
+    ocr_pdf.fitz.open = lambda *_args, **_kwargs: FakePdfDoc(page_count=1, rendered_dpis=rendered_dpis)
 
-    result = ocr_engine.ocr_pdf_batch_bytes(b"%PDF", "sample.pdf", "application/pdf", start_page=0, page_count=1, mode="fast")
+    result = ocr_pdf_batch_bytes(b"%PDF", "sample.pdf", "application/pdf", start_page=0, page_count=1, mode="tiny")
 
-    assert calls == ["PP-OCRv5_mobile_det", "PP-OCRv5_server_det"]
-    assert rendered_dpis == [150, 220]
+    assert calls == ["PP-OCRv6_tiny_det", "PP-OCRv6_medium_det"]
+    assert rendered_dpis == [140, 220]
     assert result["fallbackUsed"] is True
     assert result["quality"]["fallbackReasons"]
     assert result["quality"]["lowQualityPageCount"] == 1
@@ -226,12 +230,13 @@ def test_pdf_page_fallback_rerenders_with_accurate_dpi() -> None:
 
 
 def test_engine_info_exposes_modes() -> None:
-    info = ocr_engine.engine_info()
-    assert info["ocrModes"] == ["fast", "balanced", "accurate"]
-    assert info["defaultOcrMode"] == "balanced"
-    assert info["modeConfigs"]["fast"]["pdfRenderDpi"] == 150
-    assert info["modeConfigs"]["balanced"]["preprocessMaxSide"] == 2200
-    assert info["modeConfigs"]["accurate"]["docUnwarping"] is True
+    info = engine_info()
+    assert info["modes"] == ["tiny", "small", "medium"]
+    assert info["defaultMode"] == "small"
+    assert info["modeConfig"]["tiny"]["pdfRenderDpi"] == 140
+    assert info["modeConfig"]["small"]["preprocessMaxSide"] == 2000
+    assert info["modeConfig"]["medium"]["docUnwarping"] is True
+    assert info["capabilities"]["imageCompress"] is True
 
 
 def main() -> None:
@@ -239,9 +244,9 @@ def main() -> None:
     test_mode_config_and_cache()
     test_preprocess_scales_and_normalizes_rgb()
     test_quality_heuristics()
-    test_image_ocr_falls_back_to_accurate_once()
+    test_image_ocr_falls_back_to_medium_once()
     test_pdf_batch_uses_mode_dpi_and_page_range()
-    test_pdf_page_fallback_rerenders_with_accurate_dpi()
+    test_pdf_page_fallback_rerenders_with_medium_dpi()
     test_engine_info_exposes_modes()
 
 

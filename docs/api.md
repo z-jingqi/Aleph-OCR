@@ -18,11 +18,14 @@ Public gateway health check.
 
 Returns the configured tools engine and capabilities.
 
-## POST /v1/ocr/sync
+The OCR engine container is not public API. External applications must call these Gateway routes only; `/internal/*` routes are private implementation details.
+
+## POST /v1/tools/ocr/sync
 
 Synchronous image OCR. Multipart form field:
 
 - `file`: PNG, JPEG, WebP, TIFF, BMP, HEIC, or HEIF image.
+- `ocrMode`: optional `tiny`, `small`, or `medium`; defaults to `small`.
 
 Limits:
 
@@ -41,11 +44,12 @@ Synchronous image conversion. Multipart form fields:
 
 Returns the converted binary image directly. `Content-Type` matches the target format and `Content-Disposition` includes the converted filename. Max upload size is 10 MB.
 
-## POST /v1/jobs
+## POST /v1/tools/ocr
 
 Creates an OCR job. Multipart form field:
 
 - `file`: supported image or PDF.
+- `ocrMode`: optional `tiny`, `small`, or `medium`; defaults to `small`.
 - `callbackUrl`: optional HTTPS webhook URL for `ready`, `failed`, and `cancelled` notifications.
 - `metadata`: optional JSON object string echoed back in webhook payloads.
 
@@ -60,6 +64,24 @@ Images and PDFs are accepted. PDFs are always async and are processed page by pa
 Creates an async image conversion job. It accepts the same conversion fields as the sync route plus optional `callbackUrl`, `metadata`, and `Idempotency-Key`.
 
 Async conversion results are stored in R2. `GET /v1/jobs/:jobId/result` returns metadata and `GET /v1/jobs/:jobId/output` downloads the converted binary file.
+
+## POST /v1/tools/image/compress/sync
+
+Synchronous image compression. Multipart form fields:
+
+- `file`: PNG, JPEG, WebP, TIFF, BMP, HEIC, or HEIF image.
+- `targetSizeBytes`: optional positive integer target.
+- `maxWidth` and `maxHeight`: optional positive integers; aspect ratio is preserved.
+- `minQuality` and `maxQuality`: optional integers from 1 to 100; defaults to 45 and 85.
+- `outputFormat`: optional `jpeg` or `webp`; defaults to `jpeg`.
+
+Returns the compressed binary image directly. Compression does not trigger OCR.
+
+## POST /v1/tools/image/compress
+
+Creates an async image compression job. It accepts the same compression fields as the sync route plus optional `callbackUrl`, `metadata`, and `Idempotency-Key`.
+
+Async compression results are stored in R2. `GET /v1/jobs/:jobId/result` returns compression metadata and `GET /v1/jobs/:jobId/output` downloads the compressed binary file.
 
 ## GET /v1/jobs/:jobId
 
@@ -97,13 +119,13 @@ Clients can reconnect with `Last-Event-ID` to receive events after the last seen
 
 ## GET /v1/jobs/:jobId/result
 
-Returns the complete OCR result once ready, or image conversion output metadata for `tool: "image.convert"` jobs.
+Returns the complete OCR result once ready, or image output metadata for `tool: "image.convert"` and `tool: "image.compress"` jobs.
 
 If the job is `queued`, `processing`, or `cancel_requested`, this returns `409`. Cancelled, failed, deleted, and missing result states return an error instead of a partial result.
 
 ## GET /v1/jobs/:jobId/output
 
-Downloads a ready job's binary output. This is currently used by `image.convert` jobs. Non-ready jobs return `409`.
+Downloads a ready job's binary output. This is used by `image.convert` and `image.compress` jobs. Non-ready jobs return `409`.
 
 ## POST /v1/jobs/:jobId/cancel
 
@@ -124,4 +146,4 @@ Headers:
 - `X-Aleph-Tools-Timestamp`: signing timestamp.
 - `X-Aleph-Tools-Signature`: `sha256=<hex hmac>` over `<timestamp>.<raw body>`.
 
-Ready payloads include `event`, `eventId`, `jobId`, `job`, `resultUrl`, `metadata`, and `createdAt`. Image conversion ready payloads also include `outputUrl`. Failed payloads include `event`, `eventId`, `jobId`, `job`, `error`, `metadata`, and `createdAt`. Cancelled payloads include `event`, `eventId`, `jobId`, `job`, `metadata`, and `createdAt`.
+Ready payloads include `event`, `eventId`, `jobId`, `job`, `resultUrl`, `metadata`, and `createdAt`. Image output jobs also include `outputUrl`. Failed payloads include `event`, `eventId`, `jobId`, `job`, `error`, `metadata`, and `createdAt`. Cancelled payloads include `event`, `eventId`, `jobId`, `job`, `metadata`, and `createdAt`.

@@ -149,6 +149,46 @@ describe('job lifecycle processing', () => {
     expect([...env.objects.keys()].some((key) => key.includes('outputs/') && key.endsWith('/receipt.webp'))).toBe(true);
   });
 
+  it('processes image compression jobs to ready output metadata and R2 output', async () => {
+    const env = fakeEnv();
+    const document: OcrDocument = { type: 'image', filename: 'receipt.png', mimeType: 'image/png', sizeBytes: 3 };
+    const job = await createJob(env, 'example-client-dev', document, new File(['abc'], 'receipt.png', { type: 'image/png' }), {
+      tool: 'image.compress',
+      operation: 'image.compress',
+      toolOptions: { targetSizeBytes: 1000, maxWidth: 800, outputFormat: 'jpeg' },
+    });
+    const fetchMock = vi.fn(async () => new Response(new Uint8Array([4, 5]), {
+      status: 200,
+      headers: {
+        'Content-Type': 'image/jpeg',
+        'X-Aleph-Tools-Filename': 'receipt.compressed.jpg',
+        'X-Aleph-Tools-Width': '640',
+        'X-Aleph-Tools-Height': '480',
+        'X-Aleph-Tools-Format': 'jpeg',
+        'X-Aleph-Tools-Original-Size-Bytes': '3000',
+        'X-Aleph-Tools-Quality': '72',
+        'X-Aleph-Tools-Target-Size-Bytes': '1000',
+        'X-Aleph-Tools-Target-Met': 'true',
+      },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await processJob(env, job.jobId);
+
+    const ready = await getJob(env, 'example-client-dev', job.jobId);
+    expect(ready).toMatchObject({
+      status: 'ready',
+      tool: 'image.compress',
+      output: { filename: 'receipt.compressed.jpg', originalSizeBytes: 3000, sizeBytes: 2, targetMet: true, quality: 72 },
+    });
+    await expect(getResult(env, ready!)).resolves.toMatchObject({
+      tool: 'image.compress',
+      output: { resultUrl: `/v1/jobs/${job.jobId}/output` },
+    });
+    expect(requestUrl(fetchMock.mock.calls[0]![0]).pathname).toBe('/internal/image/compress');
+    expect([...env.objects.keys()].some((key) => key.includes('outputs/') && key.endsWith('/receipt.compressed.jpg'))).toBe(true);
+  });
+
   it('honors cancel requests between PDF pages and does not write ready result', async () => {
     const env = fakeEnv();
     const document: OcrDocument = { type: 'pdf', filename: 'mixed.pdf', mimeType: 'application/pdf', sizeBytes: 3 };
@@ -186,8 +226,8 @@ function samplePdfBatchResult(document: OcrDocument, startPage: number, pageCoun
       blocks: [{ text: `Page ${pageIndex + 1}`, confidence: 0.9 }],
       tables: [],
       confidence: 0.9,
-      ocrMode: 'balanced',
-      requestedOcrMode: 'balanced',
+      ocrMode: 'small',
+      requestedOcrMode: 'small',
       fallbackUsed: false,
       quality: { lowQuality: false, reasons: [], fallbackReasons: [] },
       timingsMs: { total: 10, requestedTotal: 10, fallbackTotal: 0 },
@@ -200,8 +240,8 @@ function samplePdfBatchResult(document: OcrDocument, startPage: number, pageCoun
     pages,
     plainText: pages.map((page) => page.text).join('\n\n'),
     markdown: pages.map((page) => `## Page ${page.pageIndex + 1}\n\n${page.text}`).join('\n\n'),
-    ocrMode: 'balanced',
-    requestedOcrMode: 'balanced',
+    ocrMode: 'small',
+    requestedOcrMode: 'small',
     fallbackUsed: false,
     quality: { lowQuality: false, reasons: [], fallbackReasons: [] },
     timingsMs: { total: 10 * pageCount, requestedTotal: 10 * pageCount, fallbackTotal: 0 },

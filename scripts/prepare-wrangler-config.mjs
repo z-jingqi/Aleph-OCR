@@ -16,7 +16,6 @@ const defaultToolsDomain = environment === 'prod' ? 'tools.aleph-cat.com' : 'dev
 const values = {
   __ENV__: environment,
   __TOOLS_DOMAIN__: process.env[`ALEPH_TOOLS_DOMAIN_${suffix}`] ?? defaultToolsDomain,
-  __TOOLS_ENGINE_URL__: '',
   __TOOLS_CONTAINER_IMAGE__: containerImage,
   __D1_DATABASE_ID__: process.env[`ALEPH_TOOLS_D1_DATABASE_ID_${suffix}`] ?? '__D1_DATABASE_ID__',
   __R2_BUCKET__: process.env[`ALEPH_TOOLS_R2_BUCKET_${suffix}`] ?? `aleph-tools-assets-${environment}`,

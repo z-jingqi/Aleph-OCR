@@ -24,24 +24,24 @@ export class FakeStatement {
   async run() {
     const sql = normalizeSql(this.sql);
     let changes = 0;
-    if (sql.includes('insert into ocr_jobs')) changes = this.insertJob();
-    else if (sql.includes('update ocr_jobs') && sql.includes('attempt_count = attempt_count + 1')) changes = this.claimJob();
-    else if (sql.includes('update ocr_jobs') && sql.includes('workflow_id = ?')) changes = this.attachWorkflow();
-    else if (sql.includes('update ocr_jobs') && sql.includes('cancelled_at = ?')) changes = this.requestCancel();
-    else if (sql.includes('update ocr_jobs') && sql.includes('coalesce(cancelled_at')) changes = this.completeCancel();
-    else if (sql.includes('update ocr_jobs') && sql.includes('completed_at = null') && sql.includes('where job_id = ? and status = ?')) changes = this.requeueJobForRetry();
-    else if (sql.includes('update ocr_jobs') && sql.includes('where job_id = ? and status = ?')) changes = this.resetExpiredJob();
-    else if (sql.includes('update ocr_jobs') && sql.includes('coalesce')) changes = this.updateProgress();
-    else if (sql.includes('update ocr_jobs') && sql.includes('result_r2_key = ?')) changes = this.setReady();
-    else if (sql.includes('update ocr_jobs') && sql.includes('result_r2_key = null')) changes = this.setDeleted();
+    if (sql.includes('insert into tool_jobs')) changes = this.insertJob();
+    else if (sql.includes('update tool_jobs') && sql.includes('attempt_count = attempt_count + 1')) changes = this.claimJob();
+    else if (sql.includes('update tool_jobs') && sql.includes('workflow_id = ?')) changes = this.attachWorkflow();
+    else if (sql.includes('update tool_jobs') && sql.includes('cancelled_at = ?')) changes = this.requestCancel();
+    else if (sql.includes('update tool_jobs') && sql.includes('coalesce(cancelled_at')) changes = this.completeCancel();
+    else if (sql.includes('update tool_jobs') && sql.includes('completed_at = null') && sql.includes('where job_id = ? and status = ?')) changes = this.requeueJobForRetry();
+    else if (sql.includes('update tool_jobs') && sql.includes('where job_id = ? and status = ?')) changes = this.resetExpiredJob();
+    else if (sql.includes('update tool_jobs') && sql.includes('coalesce')) changes = this.updateProgress();
+    else if (sql.includes('update tool_jobs') && sql.includes('result_r2_key = ?')) changes = this.setReady();
+    else if (sql.includes('update tool_jobs') && sql.includes('result_r2_key = null')) changes = this.setDeleted();
     else if (sql.includes('insert or ignore into ocr_job_pages')) changes = this.insertPage();
     else if (sql.includes('update ocr_job_pages') && sql.includes('attempt_count = attempt_count + 1')) changes = this.claimPage();
     else if (sql.includes('update ocr_job_pages') && sql.includes('result_r2_key = ?')) changes = this.setPageReady();
     else if (sql.includes('update ocr_job_pages') && sql.includes('error = ?')) changes = this.setPageFailed();
-    else if (sql.includes('insert into ocr_job_events')) changes = this.insertEvent();
-    else if (sql.includes('insert into ocr_webhook_deliveries')) changes = this.insertDelivery();
-    else if (sql.includes('update ocr_webhook_deliveries') && sql.includes('status = ?') && sql.includes('next_attempt_at = null')) changes = this.markDelivered();
-    else if (sql.includes('update ocr_webhook_deliveries') && sql.includes('next_attempt_at = ?')) changes = this.markFailed();
+    else if (sql.includes('insert into tool_job_events')) changes = this.insertEvent();
+    else if (sql.includes('insert into tool_webhook_deliveries')) changes = this.insertDelivery();
+    else if (sql.includes('update tool_webhook_deliveries') && sql.includes('status = ?') && sql.includes('next_attempt_at = null')) changes = this.markDelivered();
+    else if (sql.includes('update tool_webhook_deliveries') && sql.includes('next_attempt_at = ?')) changes = this.markFailed();
     return { success: true, meta: { changes, rows_written: changes } };
   }
 
@@ -386,7 +386,7 @@ export class FakeStatement {
       const max = this.env.events.filter((row) => row.job_id === jobId).reduce((value, row) => Math.max(value, row.sequence), 0);
       return [{ sequence: max + 1 }];
     }
-    if (sql.includes('from ocr_job_events')) {
+    if (sql.includes('from tool_job_events')) {
       const [jobId, clientId, afterSequence] = this.params;
       return this.env.events
         .filter((row) => row.job_id === jobId && row.client_id === clientId && row.sequence > (afterSequence as number))
@@ -399,7 +399,7 @@ export class FakeStatement {
         .filter((row) => row.client_id === clientId && ['queued', 'processing', 'cancel_requested'].includes(row.status))
         .map((row) => ({ job_id: row.job_id }));
     }
-    if (sql.includes('from ocr_webhook_deliveries')) {
+    if (sql.includes('from tool_webhook_deliveries')) {
       const [now] = this.params;
       return [...this.env.deliveries.values()].filter(
         (row) => ['pending', 'failed'].includes(row.status) && (!row.next_attempt_at || row.next_attempt_at <= (now as string)),

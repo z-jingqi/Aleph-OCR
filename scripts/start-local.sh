@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GATEWAY_DIR="${ROOT_DIR}/apps/gateway"
 ENGINE_IMAGE="${ENGINE_IMAGE:-aleph-tools-container:local}"
+ENGINE_PLATFORM="${ENGINE_PLATFORM:-}"
 ENGINE_CONTAINER="${ENGINE_CONTAINER:-aleph-tools-engine-local}"
 ENGINE_PORT="${ENGINE_PORT:-8090}"
 GATEWAY_PORT="${GATEWAY_PORT:-8787}"
@@ -86,7 +87,11 @@ ensure_dev_var "JOB_RETENTION_DAYS" "7"
 
 if [ "$REBUILD_IMAGE" = "1" ] || ! docker image inspect "$ENGINE_IMAGE" >/dev/null 2>&1; then
   log "Building ${ENGINE_IMAGE}"
-  docker build -t "$ENGINE_IMAGE" "${ROOT_DIR}/apps/ocr-container"
+  if [ -n "$ENGINE_PLATFORM" ]; then
+    docker build --platform "$ENGINE_PLATFORM" -t "$ENGINE_IMAGE" "${ROOT_DIR}/apps/ocr-container"
+  else
+    docker build -t "$ENGINE_IMAGE" "${ROOT_DIR}/apps/ocr-container"
+  fi
 fi
 
 if docker ps -a --format '{{.Names}}' | grep -Fxq "$ENGINE_CONTAINER"; then
@@ -95,11 +100,20 @@ if docker ps -a --format '{{.Names}}' | grep -Fxq "$ENGINE_CONTAINER"; then
 fi
 
 log "Starting tools engine on http://127.0.0.1:${ENGINE_PORT}"
-docker run -d --rm \
-  --name "$ENGINE_CONTAINER" \
-  -p "127.0.0.1:${ENGINE_PORT}:8090" \
-  -e "TOOLS_ENGINE_TOKEN=${TOOLS_ENGINE_TOKEN}" \
-  "$ENGINE_IMAGE" >/dev/null
+if [ -n "$ENGINE_PLATFORM" ]; then
+  docker run -d --rm \
+    --platform "$ENGINE_PLATFORM" \
+    --name "$ENGINE_CONTAINER" \
+    -p "127.0.0.1:${ENGINE_PORT}:8090" \
+    -e "TOOLS_ENGINE_TOKEN=${TOOLS_ENGINE_TOKEN}" \
+    "$ENGINE_IMAGE" >/dev/null
+else
+  docker run -d --rm \
+    --name "$ENGINE_CONTAINER" \
+    -p "127.0.0.1:${ENGINE_PORT}:8090" \
+    -e "TOOLS_ENGINE_TOKEN=${TOOLS_ENGINE_TOKEN}" \
+    "$ENGINE_IMAGE" >/dev/null
+fi
 STARTED_ENGINE=1
 
 log "Waiting for tools engine health"

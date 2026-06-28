@@ -1,5 +1,7 @@
 import {
   EngineInfoSchema,
+  type ImageCompressFormat,
+  type ImageCompressOptions,
   OcrResultSchema,
   type EngineInfo,
   type ImageConvertFormat,
@@ -29,6 +31,19 @@ export type ImageConvertResponse = {
   format: ImageConvertFormat;
 };
 
+export type ImageCompressResponse = {
+  bytes: ArrayBuffer;
+  filename: string;
+  mimeType: string;
+  originalSizeBytes: number;
+  width: number;
+  height: number;
+  format: ImageCompressFormat;
+  quality: number;
+  targetSizeBytes?: number;
+  targetMet: boolean;
+};
+
 export type PdfSourceObject = {
   body: ReadableStream;
 };
@@ -46,31 +61,12 @@ export async function getEngineInfo(env: ToolsClientEnv): Promise<EngineInfo> {
   return EngineInfoSchema.parse(data);
 }
 
-export async function ocrImage(env: ToolsClientEnv, file: File, mode: OcrMode = 'balanced'): Promise<OcrResult> {
+export async function ocrImage(env: ToolsClientEnv, file: File, mode: OcrMode = 'small'): Promise<OcrResult> {
   const form = new FormData();
   form.append('file', file, file.name);
   const response = await engineFetch(env, ocrPath('/internal/ocr/image', mode), { method: 'POST', body: form });
   const data = await response.json();
   return OcrResultSchema.parse(data);
-}
-
-export async function ocrPdf(env: ToolsClientEnv, file: File, mode: OcrMode = 'balanced'): Promise<OcrResult> {
-  const form = new FormData();
-  form.append('file', file, file.name);
-  const response = await engineFetch(env, ocrPath('/internal/ocr/pdf', mode), { method: 'POST', body: form });
-  const data = await response.json();
-  return OcrResultSchema.parse(data);
-}
-
-export async function getPdfInfo(env: ToolsClientEnv, file: File): Promise<{ pageCount: number }> {
-  const form = new FormData();
-  form.append('file', file, file.name);
-  const response = await engineFetch(env, '/internal/ocr/pdf-info', { method: 'POST', body: form });
-  const data = (await response.json()) as { pageCount?: unknown };
-  if (!Number.isInteger(data.pageCount) || Number(data.pageCount) < 0) {
-    throw new OcrEngineError('OCR engine returned invalid PDF metadata', 500);
-  }
-  return { pageCount: Number(data.pageCount) };
 }
 
 export async function getPdfInfoFromObject(env: ToolsClientEnv, object: PdfSourceObject, filename: string): Promise<{ pageCount: number }> {
@@ -87,21 +83,13 @@ export async function getPdfInfoFromObject(env: ToolsClientEnv, object: PdfSourc
   return { pageCount: Number(data.pageCount) };
 }
 
-export async function ocrPdfPage(env: ToolsClientEnv, file: File, pageIndex: number, mode: OcrMode = 'balanced'): Promise<OcrResult> {
-  const form = new FormData();
-  form.append('file', file, file.name);
-  const response = await engineFetch(env, ocrPath('/internal/ocr/pdf-page', mode, { page_index: pageIndex }), { method: 'POST', body: form });
-  const data = await response.json();
-  return OcrResultSchema.parse(data);
-}
-
 export async function ocrPdfBatchFromObject(
   env: ToolsClientEnv,
   object: PdfSourceObject,
   filename: string,
   startPage: number,
   pageCount: number,
-  mode: OcrMode = 'balanced',
+  mode: OcrMode = 'small',
 ): Promise<OcrResult> {
   const response = await engineFetch(env, ocrPath('/internal/ocr/pdf-batch', mode, { filename, start_page: startPage, page_count: pageCount }), {
     method: 'POST',
@@ -133,6 +121,54 @@ export async function convertImage(env: ToolsClientEnv, file: File, options: Ima
     throw new OcrEngineError('Image conversion engine returned invalid metadata', 500);
   }
   return { bytes, filename, mimeType, width, height, format };
+}
+
+export async function compressImage(env: ToolsClientEnv, file: File, options: ImageCompressOptions): Promise<ImageCompressResponse> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  form.append('output_format', options.outputFormat ?? 'jpeg');
+  form.append('min_quality', String(options.minQuality ?? 45));
+  form.append('max_quality', String(options.maxQuality ?? 85));
+  if (options.targetSizeBytes !== undefined) form.append('target_size_bytes', String(options.targetSizeBytes));
+  if (options.maxWidth !== undefined) form.append('max_width', String(options.maxWidth));
+  if (options.maxHeight !== undefined) form.append('max_height', String(options.maxHeight));
+
+  const response = await engineFetch(env, '/internal/image/compress', { method: 'POST', body: form });
+  const bytes = await response.arrayBuffer();
+  const filename = response.headers.get('X-Aleph-Tools-Filename') ?? compressedFilename(file.name, options.outputFormat ?? 'jpeg');
+  const mimeType = response.headers.get('Content-Type')?.split(';')[0] ?? mimeTypeForFormat(options.outputFormat ?? 'jpeg');
+  const width = Number(response.headers.get('X-Aleph-Tools-Width'));
+  const height = Number(response.headers.get('X-Aleph-Tools-Height'));
+  const originalSizeBytes = Number(response.headers.get('X-Aleph-Tools-Original-Size-Bytes'));
+  const quality = Number(response.headers.get('X-Aleph-Tools-Quality'));
+  const format = response.headers.get('X-Aleph-Tools-Format') ?? options.outputFormat ?? 'jpeg';
+  const targetSizeHeader = response.headers.get('X-Aleph-Tools-Target-Size-Bytes');
+  if (
+    !Number.isInteger(width) ||
+    width <= 0 ||
+    !Number.isInteger(height) ||
+    height <= 0 ||
+    !Number.isInteger(originalSizeBytes) ||
+    originalSizeBytes < 0 ||
+    !Number.isInteger(quality) ||
+    quality < 1 ||
+    quality > 100 ||
+    !isImageCompressFormat(format)
+  ) {
+    throw new OcrEngineError('Image compression engine returned invalid metadata', 500);
+  }
+  return {
+    bytes,
+    filename,
+    mimeType,
+    originalSizeBytes,
+    width,
+    height,
+    format,
+    quality,
+    ...(targetSizeHeader ? { targetSizeBytes: Number(targetSizeHeader) } : {}),
+    targetMet: response.headers.get('X-Aleph-Tools-Target-Met') === 'true',
+  };
 }
 
 async function engineFetch(env: ToolsClientEnv, path: string, init: RequestInit): Promise<Response> {
@@ -168,12 +204,22 @@ function convertedFilename(filename: string, format: ImageConvertFormat): string
   return `${base}.${extension}`;
 }
 
-function mimeTypeForFormat(format: ImageConvertFormat): string {
+function compressedFilename(filename: string, format: ImageCompressFormat): string {
+  const extension = format === 'jpeg' ? 'jpg' : format;
+  const base = filename.replace(/\.[^.]+$/, '') || 'image';
+  return `${base}.compressed.${extension}`;
+}
+
+function mimeTypeForFormat(format: ImageConvertFormat | ImageCompressFormat): string {
   return `image/${format === 'jpeg' ? 'jpeg' : format}`;
 }
 
 function isImageConvertFormat(value: string): value is ImageConvertFormat {
   return ['png', 'jpeg', 'webp', 'avif'].includes(value);
+}
+
+function isImageCompressFormat(value: string): value is ImageCompressFormat {
+  return ['jpeg', 'webp'].includes(value);
 }
 
 function ocrPath(path: string, mode: OcrMode, params: Record<string, string | number> = {}): string {

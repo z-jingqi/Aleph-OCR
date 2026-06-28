@@ -14,15 +14,15 @@ Or call the script directly:
 
 ```bash
 cd apps/ocr-container
-python3 scripts/benchmark-ocr.py --mode balanced --format table
+python3 scripts/benchmark-ocr.py --mode small --format table
 ```
 
 Useful variants:
 
 ```bash
 python3 scripts/benchmark-ocr.py --list-fixtures
-python3 scripts/benchmark-ocr.py --mode balanced --format json --output ../../docs/benchmark/ocr-local-results.json
-python3 scripts/benchmark-ocr.py --mode balanced --format ndjson
+python3 scripts/benchmark-ocr.py --mode small --format json --output /tmp/aleph-ocr-benchmark.json
+python3 scripts/benchmark-ocr.py --mode small --format ndjson
 ```
 
 The script discovers existing repository fixtures under `apps/gateway/test/fixtures`:
@@ -43,23 +43,25 @@ The script reports one row per fixture:
 
 If required PaddleOCR models for the requested mode are missing, the script emits skipped rows with `fallback=model-cache-incomplete` and exits without running inference. This keeps local validation from implicitly downloading models. Use `--no-model-cache-check` only when models are mounted or cached in a non-standard path.
 
+Generated benchmark JSON files are local evidence and should not be committed. Keep them under `/tmp`, CI artifacts, or release evidence storage.
+
 ## OCR Modes
 
-Public clients should treat `balanced` as the default OCR mode. Mode semantics are:
+Public clients should treat `small` as the default OCR mode. Mode semantics are:
 
 | Mode | Intent | Expected tradeoff |
 | --- | --- | --- |
-| `fast` | Preview or low-latency OCR on simple images. | Lower latency, lower tolerance for skewed or dense documents. |
-| `balanced` | Default production path. | Normal PaddleOCR quality and latency budget. |
-| `accurate` | Quality-first processing for difficult documents. | Higher latency and resource usage. |
+| `tiny` | Preview or low-latency OCR on simple images. | Lowest latency, lower tolerance for skewed or dense documents. |
+| `small` | Default production path. | Balanced PP-OCRv6 quality and latency budget. |
+| `medium` | Quality-first processing for difficult documents. | Higher latency and resource usage. |
 
-The Python engine runs the requested mode directly. `fast` and `balanced` automatically retry once with `accurate` when quality heuristics mark the first pass as low quality. `accurate` does not fallback.
+The Python engine runs the requested mode directly. `tiny` and `small` automatically retry once with `medium` when quality heuristics mark the first pass as low quality. `medium` does not fallback.
 
 ## Fallback Semantics
 
 There are two fallback layers to keep separate:
 
-- Quality fallback: `fast` and `balanced` run a second `accurate` pass when the first pass returns no blocks, very short text, low average confidence, or an abnormally short numeric/table-like result. Results expose `fallbackUsed=true`, `requestedOcrMode`, final `ocrMode`, `quality.fallbackReasons`, and `timingsMs.requestedTotal/fallbackTotal`.
+- Quality fallback: `tiny` and `small` run a second `medium` pass when the first pass returns no blocks, very short text, low average confidence, or an abnormally short numeric/table-like result. Results expose `fallbackUsed=true`, `requestedOcrMode`, final `ocrMode`, `quality.fallbackReasons`, and `timingsMs.requestedTotal/fallbackTotal`.
 - Execution fallback: the gateway starts Cloudflare Workflows when configured and falls back to the queue processor when only `TOOLS_JOBS` is available. The local benchmark bypasses both paths and does not validate Workflow or Queue latency.
 
 Fallback is a quality signal, not a failure. Production acceptance should fail when fallback is caused by missing models or dependencies, but quality fallback is expected for difficult inputs as long as `fallbackUsed` and timings are recorded.
@@ -84,12 +86,20 @@ PADDLEOCR_HOME=/models/paddleocr scripts/download-models.sh
 
 The current container environment sets `PADDLEOCR_HOME=/models/paddleocr`. A production image should preserve that directory with the downloaded PaddleOCR assets. If the runtime container starts without those files, the first request may attempt model resolution, which is both slow and unsuitable for restricted egress deployments.
 
+Build and benchmark OCR images as `linux/amd64`:
+
+```bash
+docker build --platform linux/amd64 -t aleph-tools-container:amd64-test apps/ocr-container
+```
+
+Local Apple Silicon arm64 containers are useful for image conversion/compression checks, but they are not accepted for OCR inference sign-off. PaddleOCR 3.7.0 and PaddlePaddle 3.2.2 can crash in the arm64 OCR predictor path even when model initialization succeeds. Use amd64 local images and Cloudflare dev smoke tests for OCR acceptance.
+
 Validation checks before promoting an image:
 
 - The image contains a non-empty `/models/paddleocr` cache or an equivalent configured model directory.
 - A container-local benchmark reports `modelCache.present=true`.
 - Cold benchmark logs do not show model downloads or remote model resolution.
-- Default `balanced` fixtures report either `fallback=not-used` or `fallback=used` with explicit `quality.fallbackReasons`.
+- Default `small` fixtures report either `fallback=not-used` or `fallback=used` with explicit `quality.fallbackReasons`.
 
 ## Performance Acceptance Criteria
 
@@ -97,8 +107,8 @@ Use the existing fixtures for local regression checks. Do not run large-model or
 
 Minimum correctness gates:
 
-- Every discovered default fixture completes in `balanced` mode.
-- Any quality fallback records `fallbackUsed=true`, final `ocrMode=accurate`, and non-zero fallback timings.
+- Every discovered default fixture completes in `small` mode.
+- Any quality fallback records `fallbackUsed=true`, final `ocrMode=medium`, and non-zero fallback timings.
 - `text_len > 0` for every fixture.
 - `avg_conf` is present for every fixture that returns OCR blocks.
 

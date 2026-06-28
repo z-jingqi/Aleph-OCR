@@ -7,7 +7,6 @@
   "workers_dev": true,
   "vars": {
     "APP_ENV": "__ENV__",
-    "ALEPH_TOOLS_ENGINE_URL": "__TOOLS_ENGINE_URL__",
     "JOB_RETENTION_DAYS": "7"
   },
   "d1_databases": [

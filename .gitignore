@@ -1,9 +1,13 @@
 .DS_Store
 node_modules/
+.pnpm-store/
 dist/
 .turbo/
+coverage/
 .wrangler/
 .dev-logs/
+*.log
+*.tsbuildinfo
 .dev.vars
 .env
 .env.*

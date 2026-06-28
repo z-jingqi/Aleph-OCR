@@ -1,6 +1,8 @@
 import {
   ImageConvertOptionsSchema,
+  ImageCompressOptionsSchema,
   OcrModeSchema,
+  type ImageCompressOptions,
   type ImageConvertOptions,
   type OcrMode,
 } from '@aleph-tools/shared';
@@ -50,6 +52,26 @@ export async function readImageConvertRequest(request: Request): Promise<
   const options = parseImageConvertOptions(form);
   if (!options.ok) return options;
 
+  return { ok: true, file, options: options.options, ...optionalSharedFields(shared) };
+}
+
+export async function readImageCompressRequest(request: Request): Promise<
+  | { ok: true; file: File; options: ImageCompressOptions; callbackUrl?: string; metadata?: Record<string, unknown> }
+  | UploadParseError
+> {
+  const contentType = request.headers.get('content-type') ?? '';
+  if (!contentType.includes('multipart/form-data')) {
+    return { ok: false, status: 415, error: 'Expected multipart/form-data' };
+  }
+  const form = await request.formData();
+  const file = form.get('file');
+  if (!(file instanceof File)) {
+    return { ok: false, status: 400, error: 'Please upload a file in the "file" field' };
+  }
+  const shared = parseSharedMultipartFields(form);
+  if (!shared.ok) return shared;
+  const options = parseImageCompressOptions(form);
+  if (!options.ok) return options;
   return { ok: true, file, options: options.options, ...optionalSharedFields(shared) };
 }
 
@@ -103,6 +125,25 @@ function parseImageConvertOptions(form: FormData): { ok: true; options: ImageCon
   return { ok: true, options: parsed.data };
 }
 
+function parseImageCompressOptions(form: FormData): { ok: true; options: ImageCompressOptions } | { ok: false; status: 400; error: string } {
+  const raw = {
+    targetSizeBytes: optionalNumber(form.get('targetSizeBytes')),
+    maxWidth: optionalNumber(form.get('maxWidth')),
+    maxHeight: optionalNumber(form.get('maxHeight')),
+    minQuality: optionalNumber(form.get('minQuality')),
+    maxQuality: optionalNumber(form.get('maxQuality')),
+    outputFormat: form.get('outputFormat') ?? undefined,
+  };
+  if (raw.targetSizeBytes === null) return { ok: false, status: 400, error: 'targetSizeBytes must be a number' };
+  if (raw.maxWidth === null) return { ok: false, status: 400, error: 'maxWidth must be a number' };
+  if (raw.maxHeight === null) return { ok: false, status: 400, error: 'maxHeight must be a number' };
+  if (raw.minQuality === null) return { ok: false, status: 400, error: 'minQuality must be a number' };
+  if (raw.maxQuality === null) return { ok: false, status: 400, error: 'maxQuality must be a number' };
+  const parsed = ImageCompressOptionsSchema.safeParse(raw);
+  if (!parsed.success) return { ok: false, status: 400, error: parsed.error.issues[0]?.message ?? 'Invalid image compression options' };
+  return { ok: true, options: parsed.data };
+}
+
 function parseOcrMode(form: FormData): { ok: true; ocrMode: OcrMode } | { ok: false; status: 400; error: string } {
   const value = form.get('ocrMode');
   if (value !== null && typeof value !== 'string') {
@@ -110,7 +151,7 @@ function parseOcrMode(form: FormData): { ok: true; ocrMode: OcrMode } | { ok: fa
   }
   const parsed = OcrModeSchema.safeParse(value ?? undefined);
   if (!parsed.success) {
-    return { ok: false, status: 400, error: 'ocrMode must be one of fast, balanced, accurate' };
+    return { ok: false, status: 400, error: 'ocrMode must be one of tiny, small, medium' };
   }
   return { ok: true, ocrMode: parsed.data };
 }
@@ -120,6 +161,11 @@ function numberField(value: FormDataEntryValue): number | null {
   const parsed = Number(value);
   if (!Number.isInteger(parsed)) return null;
   return parsed;
+}
+
+function optionalNumber(value: FormDataEntryValue | null): number | null | undefined {
+  if (value === null) return undefined;
+  return numberField(value);
 }
 
 function parseMetadata(value: string): Record<string, unknown> | null {

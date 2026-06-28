@@ -1,6 +1,6 @@
 # Aleph Tools
 
-Aleph Tools is a shared tool service for Aleph projects. It exposes a Cloudflare Worker gateway with project API-key authentication, stores async jobs durably in D1/R2/Queues/Workflows, and delegates heavier work to a Python FastAPI container. The first tools are OCR and image conversion.
+Aleph Tools is a shared tool service for Aleph projects. It exposes a Cloudflare Worker gateway with project API-key authentication, stores async jobs durably in D1/R2/Queues/Workflows, and delegates heavier work to a private Python FastAPI container. The first tools are OCR, image conversion, and image compression.
 
 ## Architecture
 
@@ -42,7 +42,7 @@ PaddleOCR and PaddlePaddle are heavy dependencies. The first OCR request may dow
 apps/ocr-container/scripts/download-models.sh
 ```
 
-For service-free local OCR benchmark guidance, modes, cold/warm interpretation, and performance acceptance gates, see [docs/benchmark/ocr-performance.md](docs/benchmark/ocr-performance.md).
+For local validation before deployment, see [docs/local-testing.md](docs/local-testing.md). For service-free OCR benchmark guidance, modes, cold/warm interpretation, and performance acceptance gates, see [docs/benchmark/ocr-performance.md](docs/benchmark/ocr-performance.md).
 
 ## Local Development
 
@@ -53,6 +53,16 @@ pnpm dev:local
 ```
 
 The script uses `aleph-tools-container:local`, creates `apps/gateway/.dev.vars` if needed, applies local D1 migrations, and starts the gateway on `http://127.0.0.1:8787`. Default local API key from the example file is `dev-key`.
+
+For OCR E2E on Apple Silicon, use the amd64 image path because local arm64 PaddleOCR inference is not reliable:
+
+```bash
+ENGINE_IMAGE=aleph-tools-container:amd64-test \
+ENGINE_PLATFORM=linux/amd64 \
+REBUILD_IMAGE=1 \
+APPLY_MIGRATIONS=0 \
+pnpm dev:local
+```
 
 Force a fresh container image build before startup:
 
@@ -124,14 +134,19 @@ Default custom domains:
 - dev: `dev-tools.aleph-cat.com`
 - prod: `tools.aleph-cat.com`
 
-Source files, JSON results, page results, and image conversion outputs expire after 7 days by default. A scheduled Worker cleanup marks expired jobs deleted and removes their R2 objects.
+Source files, JSON results, page results, and image tool outputs expire after 7 days by default. A scheduled Worker cleanup marks expired jobs deleted and removes their R2 objects.
 
-Production async jobs are orchestrated through Cloudflare Workflows. Queue messages remain small references only, and PDF OCR runs page by page so a single queue invocation does not need to hold a long-running 100-page job open. Container disk is treated as ephemeral; source files, page results, final results, converted outputs, progress snapshots, and events are persisted to R2/D1.
+Production async jobs are orchestrated through Cloudflare Workflows. Queue messages remain small references only, and PDF OCR runs page by page so a single queue invocation does not need to hold a long-running 100-page job open. Container disk is treated as ephemeral; source files, page results, final results, image outputs, progress snapshots, and events are persisted to R2/D1.
+
+The Python OCR engine is an internal Gateway dependency. Production calls it through the Cloudflare Container binding only; external applications must call Gateway routes and must not call `/internal/*` container routes directly.
 
 ## Example
 
 ```bash
-curl -X POST http://127.0.0.1:8787/v1/ocr/sync   -H 'Authorization: Bearer dev-key'   -F 'file=@sample.png'
+curl -X POST http://127.0.0.1:8787/v1/tools/ocr/sync \
+  -H 'Authorization: Bearer dev-key' \
+  -F 'file=@sample.png' \
+  -F 'ocrMode=small'
 ```
 
 Convert an image synchronously:
@@ -148,12 +163,17 @@ curl -X POST http://127.0.0.1:8787/v1/tools/image/convert/sync \
 For PDFs, create an async job:
 
 ```bash
-curl -X POST http://127.0.0.1:8787/v1/jobs   -H 'Authorization: Bearer dev-key'   -F 'file=@sample.pdf'
+curl -X POST http://127.0.0.1:8787/v1/tools/ocr \
+  -H 'Authorization: Bearer dev-key' \
+  -F 'file=@sample.pdf' \
+  -F 'ocrMode=small'
 ```
 
 Async jobs can include `callbackUrl` and `metadata` multipart fields for webhook notifications. Use `Idempotency-Key` when retrying a create request. Control panels can subscribe to `GET /v1/jobs/:jobId/events` for SSE progress events, and callers can cancel work with `POST /v1/jobs/:jobId/cancel`.
 
 For async image conversion use `POST /v1/tools/image/convert` with PNG, JPEG, WebP, TIFF, BMP, HEIC, or HEIF input; `targetFormat=png|jpeg|webp|avif`; optional `quality`, `width`, `height`; and `fit=contain|cover|inside`. Once ready, `GET /v1/jobs/:jobId/result` returns output metadata and `GET /v1/jobs/:jobId/output` downloads the binary file.
+
+For image compression use `POST /v1/tools/image/compress/sync` or `POST /v1/tools/image/compress` with `targetSizeBytes`, `maxWidth`, `maxHeight`, `minQuality`, `maxQuality`, and `outputFormat=jpeg|webp`. Compression is independent from OCR: the frontend should call compression first, then submit the compressed image to OCR if that is the desired workflow.
 
 ## Scripts
 

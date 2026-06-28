@@ -19,7 +19,7 @@ export async function createWebhookDeliveryForEvent(
     createdAt: event.createdAt,
   };
   await env.DB.prepare(
-    `INSERT INTO ocr_webhook_deliveries
+    `INSERT INTO tool_webhook_deliveries
       (delivery_id, event_id, job_id, client_id, callback_url, payload_json, status, attempt_count,
        next_attempt_at, last_error, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, ?, ?)`,
@@ -46,7 +46,7 @@ export async function listDueWebhookDeliveries(
   nowIso = new Date().toISOString(),
 ): Promise<WebhookDelivery[]> {
   const rows = await env.DB.prepare(
-    `SELECT * FROM ocr_webhook_deliveries
+    `SELECT * FROM tool_webhook_deliveries
      WHERE status IN ('pending', 'failed') AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
      ORDER BY created_at ASC
      LIMIT 50`,
@@ -62,7 +62,7 @@ export async function markWebhookDelivered(
 ): Promise<void> {
   const timestamp = new Date().toISOString();
   await env.DB.prepare(
-    `UPDATE ocr_webhook_deliveries
+    `UPDATE tool_webhook_deliveries
      SET status = ?, attempt_count = attempt_count + 1, next_attempt_at = NULL, last_error = NULL, updated_at = ?
      WHERE delivery_id = ?`,
   )
@@ -80,7 +80,7 @@ export async function markWebhookFailed(
   const timestamp = new Date().toISOString();
   const nextAttemptAt = new Date(Date.now() + retryDelay * 1000).toISOString();
   await env.DB.prepare(
-    `UPDATE ocr_webhook_deliveries
+    `UPDATE tool_webhook_deliveries
      SET status = ?, attempt_count = ?, next_attempt_at = ?, last_error = ?, updated_at = ?
      WHERE delivery_id = ?`,
   )

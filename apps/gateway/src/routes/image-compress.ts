@@ -1,13 +1,13 @@
 import {
   MAX_SYNC_IMAGE_SIZE_BYTES,
-  inferDocumentType,
   isSupportedImageMime,
   type OcrDocument,
 } from '@aleph-tools/shared';
 import { maxActiveJobsPerClient, workflowConfigured } from '../config';
+import { escapeHeaderFilename } from '../http/headers';
 import { buildIdempotencyFingerprint, normalizeIdempotencyKey } from '../http/idempotency';
 import { engineErrorResponse, jsonError, jsonSuccess, parsedUploadError } from '../http/responses';
-import { readUploadedFile } from '../http/uploads';
+import { readImageCompressRequest } from '../http/uploads';
 import {
   countActiveJobsForClient,
   createJob,
@@ -15,33 +15,41 @@ import {
   publicJob,
   requireStorage,
 } from '../job-store';
-import { ocrImage } from '../ocr-client';
+import { compressImage } from '../ocr-client';
 import { startToolWorkflow } from '../workflow/runner';
-import { withRequestedOcrModeMetadata } from '../workflow/ocr-result';
 import type { GatewayApp } from './types';
 
-export function registerOcrRoutes(app: GatewayApp) {
-  app.post('/v1/tools/ocr/sync', async (c) => {
-    const parsed = await readUploadedFile(c.req.raw);
+export function registerImageCompressRoutes(app: GatewayApp) {
+  app.post('/v1/tools/image/compress/sync', async (c) => {
+    const parsed = await readImageCompressRequest(c.req.raw);
     if (!parsed.ok) return parsedUploadError(c, parsed);
 
-    const { file, ocrMode } = parsed;
+    const { file, options } = parsed;
     if (!isSupportedImageMime(file.type)) {
-      return jsonError(c, 'UNSUPPORTED_MEDIA_TYPE', 'Sync OCR only supports image files', 400, { retryable: false });
+      return jsonError(c, 'UNSUPPORTED_MEDIA_TYPE', 'Image compression only supports image files', 400, { retryable: false });
     }
     if (file.size > MAX_SYNC_IMAGE_SIZE_BYTES) {
-      return jsonError(c, 'FILE_TOO_LARGE', 'Image exceeds sync OCR size limit', 413, { retryable: false });
+      return jsonError(c, 'FILE_TOO_LARGE', 'Image exceeds sync compression size limit', 413, { retryable: false });
     }
 
     try {
-      const result = withRequestedOcrModeMetadata(await ocrImage(c.env, file, ocrMode), ocrMode);
-      return jsonSuccess(c, result);
+      const output = await compressImage(c.env, file, options);
+      return new Response(output.bytes, {
+        headers: {
+          'Content-Type': output.mimeType,
+          'Content-Length': String(output.bytes.byteLength),
+          'Content-Disposition': `attachment; filename="${escapeHeaderFilename(output.filename)}"`,
+          'X-Aleph-Tools-Original-Size-Bytes': String(output.originalSizeBytes),
+          'X-Aleph-Tools-Quality': String(output.quality),
+          'X-Aleph-Tools-Target-Met': String(output.targetMet),
+        },
+      });
     } catch (error) {
       return engineErrorResponse(c, error);
     }
   });
 
-  app.post('/v1/tools/ocr', async (c) => {
+  app.post('/v1/tools/image/compress', async (c) => {
     if (!workflowConfigured(c.env)) return jsonError(c, 'WORKFLOW_UNAVAILABLE', 'Tools workflow is not configured', 503, { retryable: true });
     try {
       requireStorage(c.env);
@@ -54,25 +62,23 @@ export function registerOcrRoutes(app: GatewayApp) {
       return jsonError(c, 'VALIDATION_ERROR', 'Idempotency-Key must be 256 characters or fewer', 400, { retryable: false });
     }
 
-    const parsed = await readUploadedFile(c.req.raw);
+    const parsed = await readImageCompressRequest(c.req.raw);
     if (!parsed.ok) return parsedUploadError(c, parsed);
 
-    const { file, callbackUrl, metadata, ocrMode } = parsed;
-    const documentType = inferDocumentType(file.type);
-    if (!documentType) {
-      return jsonError(c, 'UNSUPPORTED_MEDIA_TYPE', `Unsupported file type: ${file.type || 'unknown'}`, 400, { retryable: false });
+    const { file, options, callbackUrl, metadata } = parsed;
+    if (!isSupportedImageMime(file.type)) {
+      return jsonError(c, 'UNSUPPORTED_MEDIA_TYPE', `Unsupported image type: ${file.type || 'unknown'}`, 400, { retryable: false });
     }
 
     const document: OcrDocument = {
-      type: documentType,
-      filename: file.name || 'upload',
+      type: 'image',
+      filename: file.name || 'image',
       mimeType: file.type,
       sizeBytes: file.size,
     };
 
     try {
-      const ocrOptions = { ocrMode };
-      const fingerprint = await buildIdempotencyFingerprint(file, 'ocr', 'ocr', ocrOptions);
+      const fingerprint = await buildIdempotencyFingerprint(file, 'image.compress', 'image.compress', options);
       if (idempotencyKey) {
         const existing = await getJobByIdempotencyKey(c.env, c.get('clientId'), idempotencyKey);
         if (existing) {
@@ -88,19 +94,19 @@ export function registerOcrRoutes(app: GatewayApp) {
       }
       const workflowId = `toolswf_${crypto.randomUUID()}`;
       const job = await createJob(c.env, c.get('clientId'), document, file, {
-        tool: 'ocr',
-        operation: 'ocr',
+        tool: 'image.compress',
+        operation: 'image.compress',
+        toolOptions: options,
         ...(callbackUrl ? { callbackUrl } : {}),
         ...(metadata ? { callbackMetadata: metadata } : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
         idempotencyFingerprint: fingerprint,
-        toolOptions: ocrOptions,
         workflowId,
       });
       await startToolWorkflow(c.env, job.jobId, job.workflowId ?? workflowId);
       return jsonSuccess(c, publicJob(job), 202);
     } catch (error) {
-      return jsonError(c, 'INTERNAL_ERROR', error instanceof Error ? error.message : 'Could not create OCR job', 500, { retryable: true });
+      return jsonError(c, 'INTERNAL_ERROR', error instanceof Error ? error.message : 'Could not create image compression job', 500, { retryable: true });
     }
   });
 }

@@ -10,7 +10,7 @@ export PADDLE_PDX_CACHE_HOME="${PADDLE_PDX_CACHE_HOME:-${PADDLEOCR_HOME}}"
 export PYTHONPATH="${APP_DIR}:${PYTHONPATH:-}"
 
 python - <<'PY'
-from src.ocr_engine import OCR_MODES, get_ocr
+from src.ocr import OCR_MODES, get_ocr
 
 # Instantiating each configured engine causes PaddleOCR to resolve/download its models.
 for mode in OCR_MODES:

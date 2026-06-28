@@ -1,6 +1,7 @@
 from .info import engine_info
 from .modes import (
     DEFAULT_OCR_MODE,
+    FALLBACK_OCR_MODE,
     MODE_CONFIGS,
     OCR_MODE_CONFIGS,
     OCR_MODES,
@@ -25,6 +26,7 @@ from .image import ocr_image_bytes, ocr_image_path_once, ocr_image_path_with_fal
 
 __all__ = [
     "DEFAULT_OCR_MODE",
+    "FALLBACK_OCR_MODE",
     "MODE_CONFIGS",
     "OCR_MODE_CONFIGS",
     "OCR_MODES",

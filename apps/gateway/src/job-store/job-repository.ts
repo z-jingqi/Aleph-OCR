@@ -1,5 +1,7 @@
 import type {
+  ImageCompressResult,
   ImageConvertResult,
+  ImageCompressFormat,
   JobStage,
   JobStatus,
   OcrDocument,
@@ -46,7 +48,7 @@ export async function createJob(
   }
 
   const now = new Date();
-  const jobId = `ocr_${crypto.randomUUID()}`;
+  const jobId = `job_${crypto.randomUUID()}`;
   const sourceR2Key = `${SOURCE_PREFIX}/${clientId}/${jobId}/${safeR2Name(document.filename)}`;
   const expiresAt = new Date(now.getTime() + retentionDays(env) * 86400000).toISOString();
   await env.ASSETS.put(sourceR2Key, file.stream(), {
@@ -55,8 +57,10 @@ export async function createJob(
   });
 
   const timestamp = now.toISOString();
+  const tool = options.tool ?? 'ocr';
+  const operation = options.operation ?? tool;
   await env.DB.prepare(
-    `INSERT INTO ocr_jobs
+    `INSERT INTO tool_jobs
       (job_id, client_id, status, progress, stage, current_page, total_pages, document_json, source_r2_key, result_r2_key,
        error, attempt_count, processing_started_at, processing_lease_until, callback_url, callback_metadata_json,
        idempotency_key, idempotency_fingerprint, workflow_id, cancelled_at, tool, operation, tool_options_json, output_r2_key, output_json,
@@ -76,8 +80,8 @@ export async function createJob(
       options.idempotencyKey ?? null,
       options.idempotencyFingerprint ?? null,
       options.workflowId ?? null,
-      options.tool ?? 'ocr',
-      options.operation ?? null,
+      tool,
+      operation,
       options.toolOptions ? JSON.stringify(options.toolOptions) : null,
       timestamp,
       timestamp,
@@ -97,8 +101,8 @@ export async function createJob(
     updatedAt: timestamp,
     expiresAt,
     attemptCount: 0,
-    tool: options.tool ?? 'ocr',
-    ...(options.operation ? { operation: options.operation } : {}),
+    tool,
+    operation,
     ...(options.toolOptions ? { toolOptions: options.toolOptions } : {}),
     ...(options.callbackUrl ? { callbackUrl: options.callbackUrl } : {}),
     ...(options.callbackMetadata ? { callbackMetadata: options.callbackMetadata } : {}),
@@ -116,7 +120,7 @@ export async function getJobByIdempotencyKey(
   clientId: string,
   idempotencyKey: string,
 ): Promise<StoredJob | null> {
-  const row = await env.DB.prepare('SELECT * FROM ocr_jobs WHERE client_id = ? AND idempotency_key = ?')
+  const row = await env.DB.prepare('SELECT * FROM tool_jobs WHERE client_id = ? AND idempotency_key = ?')
     .bind(clientId, idempotencyKey)
     .first<JobRow>();
   return row ? mapJob(row) : null;
@@ -127,7 +131,7 @@ export async function countActiveJobsForClient(
   clientId: string,
 ): Promise<number> {
   const rows = await env.DB.prepare(
-    `SELECT job_id FROM ocr_jobs
+    `SELECT job_id FROM tool_jobs
      WHERE client_id = ? AND status IN ('queued', 'processing', 'cancel_requested')
      LIMIT 1000`,
   )
@@ -141,7 +145,7 @@ export async function getJob(
   clientId: string,
   jobId: string,
 ): Promise<StoredJob | null> {
-  const row = await env.DB.prepare('SELECT * FROM ocr_jobs WHERE job_id = ? AND client_id = ?')
+  const row = await env.DB.prepare('SELECT * FROM tool_jobs WHERE job_id = ? AND client_id = ?')
     .bind(jobId, clientId)
     .first<JobRow>();
   return row ? mapJob(row) : null;
@@ -151,7 +155,7 @@ export async function getJobForProcessing(
   env: JobStoreEnv & { DB: D1Database },
   jobId: string,
 ): Promise<StoredJob | null> {
-  const row = await env.DB.prepare('SELECT * FROM ocr_jobs WHERE job_id = ?').bind(jobId).first<JobRow>();
+  const row = await env.DB.prepare('SELECT * FROM tool_jobs WHERE job_id = ?').bind(jobId).first<JobRow>();
   return row ? mapJob(row) : null;
 }
 
@@ -164,7 +168,7 @@ export async function claimJobForProcessing(
   const nowIso = now.toISOString();
   const leaseUntil = new Date(now.getTime() + leaseSeconds * 1000).toISOString();
   const result = await env.DB.prepare(
-    `UPDATE ocr_jobs
+    `UPDATE tool_jobs
      SET status = ?, progress = ?, stage = ?, error = NULL, attempt_count = attempt_count + 1,
          processing_started_at = ?, processing_lease_until = ?, updated_at = ?
      WHERE job_id = ?
@@ -186,7 +190,7 @@ export async function attachWorkflowId(
   workflowId: string,
 ): Promise<StoredJob> {
   const timestamp = new Date().toISOString();
-  await env.DB.prepare('UPDATE ocr_jobs SET workflow_id = ?, updated_at = ? WHERE job_id = ? AND workflow_id IS NULL')
+  await env.DB.prepare('UPDATE tool_jobs SET workflow_id = ?, updated_at = ? WHERE job_id = ? AND workflow_id IS NULL')
     .bind(workflowId, timestamp, job.jobId)
     .run();
   return (await getJobForProcessing(env, job.jobId)) ?? { ...job, workflowId };
@@ -205,7 +209,7 @@ export async function requestJobCancel(
   const nextStatus: JobStatus = job.status === 'queued' ? 'cancelled' : 'cancel_requested';
   const nextStage: JobStage = job.status === 'queued' ? 'cancelled' : 'cancel_requested';
   await env.DB.prepare(
-    `UPDATE ocr_jobs
+    `UPDATE tool_jobs
      SET status = ?, progress = ?, stage = ?, processing_started_at = NULL, processing_lease_until = NULL,
          cancelled_at = ?, completed_at = ?, updated_at = ?
      WHERE job_id = ? AND client_id = ? AND status NOT IN ('ready', 'failed', 'cancelled', 'deleted')`,
@@ -237,7 +241,7 @@ export async function completeCancelledJob(
 ): Promise<StoredJob> {
   const timestamp = new Date().toISOString();
   await env.DB.prepare(
-    `UPDATE ocr_jobs
+    `UPDATE tool_jobs
      SET status = ?, progress = ?, stage = ?, processing_started_at = NULL, processing_lease_until = NULL,
          cancelled_at = COALESCE(cancelled_at, ?), completed_at = ?, updated_at = ?
      WHERE job_id = ? AND status IN ('cancel_requested', 'processing', 'queued')`,
@@ -256,7 +260,7 @@ export async function resetExpiredProcessingJobs(
   nowIso = new Date().toISOString(),
 ): Promise<string[]> {
   const rows = await env.DB.prepare(
-    `SELECT job_id FROM ocr_jobs
+    `SELECT job_id FROM tool_jobs
      WHERE status = ? AND processing_lease_until IS NOT NULL AND processing_lease_until <= ?
      LIMIT 100`,
   )
@@ -266,7 +270,7 @@ export async function resetExpiredProcessingJobs(
   for (const jobId of jobIds) {
     const timestamp = new Date().toISOString();
     await env.DB.prepare(
-      `UPDATE ocr_jobs
+      `UPDATE tool_jobs
        SET status = ?, progress = ?, stage = ?, error = ?, processing_started_at = NULL, processing_lease_until = NULL, updated_at = ?
        WHERE job_id = ? AND status = ?`,
     )
@@ -318,7 +322,7 @@ export async function updateJobProgress(
 ): Promise<StoredJob> {
   const timestamp = new Date().toISOString();
   await env.DB.prepare(
-    `UPDATE ocr_jobs
+    `UPDATE tool_jobs
      SET status = COALESCE(?, status),
          progress = COALESCE(?, progress),
          stage = COALESCE(?, stage),
@@ -384,7 +388,7 @@ export async function setJobResult(
 
   const completedAt = new Date().toISOString();
   const update = await env.DB.prepare(
-    `UPDATE ocr_jobs
+    `UPDATE tool_jobs
      SET status = ?, progress = ?, stage = ?, current_page = ?, total_pages = ?, result_r2_key = ?,
          error = NULL, processing_started_at = NULL, processing_lease_until = NULL, completed_at = ?, updated_at = ?
      WHERE job_id = ? AND status NOT IN ('cancel_requested', 'cancelled', 'deleted')`,
@@ -453,7 +457,7 @@ export async function setImageConvertResult(
 
   const completedAt = new Date().toISOString();
   const update = await env.DB.prepare(
-    `UPDATE ocr_jobs
+    `UPDATE tool_jobs
      SET status = ?, progress = ?, stage = ?, current_page = ?, total_pages = ?, result_r2_key = ?,
          output_r2_key = ?, output_json = ?, error = NULL, processing_started_at = NULL,
          processing_lease_until = NULL, completed_at = ?, updated_at = ?
@@ -470,6 +474,84 @@ export async function setImageConvertResult(
 
   const updated = await getJobForProcessing(env, job.jobId);
   if (!updated) throw new Error('Ready image conversion job not found');
+  const event = await appendJobEvent(env, updated, 'job.ready', { resultUrl: `/v1/jobs/${job.jobId}/result`, outputUrl: `/v1/jobs/${job.jobId}/output` });
+  await createWebhookDeliveryForEvent(env, updated, event, {
+    event: 'tool.job.ready',
+    job: publicJob(updated),
+    resultUrl: `/v1/jobs/${job.jobId}/result`,
+    outputUrl: `/v1/jobs/${job.jobId}/output`,
+  });
+  return updated;
+}
+
+export async function setImageCompressResult(
+  env: JobStoreEnv & { DB: D1Database; ASSETS: R2Bucket },
+  job: StoredJob,
+  output: {
+    bytes: ArrayBuffer;
+    filename: string;
+    mimeType: string;
+    originalSizeBytes: number;
+    width: number;
+    height: number;
+    format: ImageCompressFormat;
+    quality: number;
+    targetSizeBytes?: number;
+    targetMet: boolean;
+  },
+): Promise<StoredJob> {
+  const outputR2Key = `${OUTPUT_PREFIX}/${job.clientId}/${job.jobId}/${safeR2Name(output.filename)}`;
+  await env.ASSETS.put(outputR2Key, output.bytes, {
+    httpMetadata: { contentType: output.mimeType },
+    customMetadata: { jobId: job.jobId, clientId: job.clientId, tool: 'image.compress' },
+  });
+
+  const sizeBytes = output.bytes.byteLength;
+  const resultR2Key = `${RESULT_PREFIX}/${job.clientId}/${job.jobId}.json`;
+  const result: ImageCompressResult = {
+    jobId: job.jobId,
+    status: 'ready',
+    tool: 'image.compress',
+    output: {
+      filename: output.filename,
+      mimeType: output.mimeType,
+      originalSizeBytes: output.originalSizeBytes,
+      sizeBytes,
+      compressionRatio: output.originalSizeBytes > 0 ? sizeBytes / output.originalSizeBytes : 0,
+      ...(output.targetSizeBytes ? { targetSizeBytes: output.targetSizeBytes } : {}),
+      targetMet: output.targetMet,
+      width: output.width,
+      height: output.height,
+      format: output.format,
+      quality: output.quality,
+      resultUrl: `/v1/jobs/${job.jobId}/output`,
+    },
+    metadata: job.callbackMetadata ?? {},
+  };
+  await env.ASSETS.put(resultR2Key, JSON.stringify(result), {
+    httpMetadata: { contentType: 'application/json' },
+    customMetadata: { jobId: job.jobId, clientId: job.clientId, tool: 'image.compress' },
+  });
+
+  const completedAt = new Date().toISOString();
+  const update = await env.DB.prepare(
+    `UPDATE tool_jobs
+     SET status = ?, progress = ?, stage = ?, current_page = ?, total_pages = ?, result_r2_key = ?,
+         output_r2_key = ?, output_json = ?, error = NULL, processing_started_at = NULL,
+         processing_lease_until = NULL, completed_at = ?, updated_at = ?
+     WHERE job_id = ? AND status NOT IN ('cancel_requested', 'cancelled', 'deleted')`,
+  )
+    .bind('ready', 100, 'ready', 1, 1, resultR2Key, outputR2Key, JSON.stringify(result.output), completedAt, completedAt, job.jobId)
+    .run();
+  if (!hasChangedRows(update)) {
+    await Promise.all([env.ASSETS.delete(outputR2Key), env.ASSETS.delete(resultR2Key)]);
+    const latest = await getJobForProcessing(env, job.jobId);
+    if (latest && isCancelRequested(latest)) await completeCancelledJob(env, latest);
+    throw new Error('Job was cancelled before result could be stored');
+  }
+
+  const updated = await getJobForProcessing(env, job.jobId);
+  if (!updated) throw new Error('Ready image compression job not found');
   const event = await appendJobEvent(env, updated, 'job.ready', { resultUrl: `/v1/jobs/${job.jobId}/result`, outputUrl: `/v1/jobs/${job.jobId}/output` });
   await createWebhookDeliveryForEvent(env, updated, event, {
     event: 'tool.job.ready',
@@ -526,7 +608,7 @@ export async function requeueJobForRetry(
   if (latest && isCancelRequested(latest)) return completeCancelledJob(env, latest);
   const timestamp = new Date().toISOString();
   await env.DB.prepare(
-    `UPDATE ocr_jobs
+    `UPDATE tool_jobs
      SET status = ?, progress = ?, stage = ?, error = ?, processing_started_at = NULL,
          processing_lease_until = NULL, completed_at = NULL, updated_at = ?
      WHERE job_id = ? AND status = ?`,
@@ -550,7 +632,7 @@ export async function deleteJob(
   await deleteJobObjects(env, job);
   const timestamp = new Date().toISOString();
   await env.DB.prepare(
-    `UPDATE ocr_jobs
+    `UPDATE tool_jobs
      SET status = ?, progress = ?, stage = ?, result_r2_key = NULL, processing_started_at = NULL,
          processing_lease_until = NULL, completed_at = ?, updated_at = ?
      WHERE job_id = ? AND client_id = ?`,
@@ -564,7 +646,7 @@ export async function deleteJob(
 
 export async function cleanupExpiredJobs(env: JobStoreEnv & { DB: D1Database; ASSETS: R2Bucket }): Promise<number> {
   const now = new Date().toISOString();
-  const rows = await env.DB.prepare('SELECT * FROM ocr_jobs WHERE expires_at <= ? AND status != ? LIMIT 100')
+  const rows = await env.DB.prepare('SELECT * FROM tool_jobs WHERE expires_at <= ? AND status != ? LIMIT 100')
     .bind(now, 'deleted')
     .all<JobRow>();
   let cleaned = 0;
@@ -573,7 +655,7 @@ export async function cleanupExpiredJobs(env: JobStoreEnv & { DB: D1Database; AS
     await deleteJobObjects(env, job);
     const timestamp = new Date().toISOString();
     await env.DB.prepare(
-      `UPDATE ocr_jobs
+      `UPDATE tool_jobs
        SET status = ?, progress = ?, stage = ?, result_r2_key = NULL, processing_started_at = NULL,
            processing_lease_until = NULL, completed_at = ?, updated_at = ?
        WHERE job_id = ?`,

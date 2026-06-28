@@ -9,7 +9,7 @@ export async function appendJobEvent(
   type: OcrJobEventType,
   extraPayload: Record<string, unknown> = {},
 ): Promise<JobEvent> {
-  const sequenceRow = await env.DB.prepare('SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence FROM ocr_job_events WHERE job_id = ?')
+  const sequenceRow = await env.DB.prepare('SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence FROM tool_job_events WHERE job_id = ?')
     .bind(job.jobId)
     .first<SequenceRow>();
   const sequence = sequenceRow?.sequence ?? 1;
@@ -28,7 +28,7 @@ export async function appendJobEvent(
   };
 
   await env.DB.prepare(
-    `INSERT INTO ocr_job_events (event_id, job_id, client_id, sequence, type, payload_json, created_at)
+    `INSERT INTO tool_job_events (event_id, job_id, client_id, sequence, type, payload_json, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(eventId, job.jobId, job.clientId, sequence, type, JSON.stringify(payload), createdAt)
@@ -44,7 +44,7 @@ export async function listJobEvents(
   afterSequence = 0,
 ): Promise<JobEvent[]> {
   const rows = await env.DB.prepare(
-    `SELECT * FROM ocr_job_events
+    `SELECT * FROM tool_job_events
      WHERE job_id = ? AND client_id = ? AND sequence > ?
      ORDER BY sequence ASC
      LIMIT 100`,

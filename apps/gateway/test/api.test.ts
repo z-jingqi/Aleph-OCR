@@ -5,12 +5,12 @@ import { fakeEnv, fixtureFile, sampleOcrResult } from './helpers';
 const engineInfo = {
   engine: 'paddleocr',
   engineVersion: '3.x',
-  ocrModes: ['fast', 'balanced', 'accurate'],
-  defaultOcrMode: 'balanced',
-  modeConfigs: {
-    fast: { detector: 'mobile', pdfRenderDpi: 160 },
-    balanced: { detector: 'standard', pdfRenderDpi: 200 },
-    accurate: { detector: 'server', pdfRenderDpi: 240 },
+  modes: ['tiny', 'small', 'medium'],
+  defaultMode: 'small',
+  modeConfig: {
+    tiny: { detector: 'mobile', pdfRenderDpi: 160 },
+    small: { detector: 'standard', pdfRenderDpi: 200 },
+    medium: { detector: 'server', pdfRenderDpi: 240 },
   },
   capabilities: {
     image: true,
@@ -18,6 +18,8 @@ const engineInfo = {
     syncImage: true,
     imageConvert: true,
     imageConvertFormats: ['png', 'jpeg', 'webp', 'avif'],
+    imageCompress: true,
+    imageCompressFormats: ['jpeg', 'webp'],
     asyncJobs: true,
     layout: true,
     tables: false,
@@ -63,12 +65,9 @@ describe('gateway API', () => {
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       data: {
-        modes: ['fast', 'balanced', 'accurate'],
-        defaultMode: 'balanced',
-        modeConfig: { accurate: { pdfRenderDpi: 240 } },
-        ocrModes: ['fast', 'balanced', 'accurate'],
-        defaultOcrMode: 'balanced',
-        modeConfigs: { accurate: { pdfRenderDpi: 240 } },
+        modes: ['tiny', 'small', 'medium'],
+        defaultMode: 'small',
+        modeConfig: { medium: { pdfRenderDpi: 240 } },
       },
     });
   });
@@ -80,7 +79,7 @@ describe('gateway API', () => {
     form.append('file', await fixtureFile('images/receipt.png', 'image/png'));
 
     const response = await handler.fetch(
-      new Request('https://ocr.test/v1/ocr/sync', {
+      new Request('https://ocr.test/v1/tools/ocr/sync', {
         method: 'POST',
         headers: { Authorization: 'Bearer dev-key' },
         body: form,
@@ -102,10 +101,10 @@ describe('gateway API', () => {
     vi.stubGlobal('fetch', fetchMock);
     const form = new FormData();
     form.append('file', await fixtureFile('images/receipt.png', 'image/png'));
-    form.append('ocrMode', 'accurate');
+    form.append('ocrMode', 'medium');
 
     const response = await handler.fetch(
-      new Request('https://ocr.test/v1/ocr/sync', {
+      new Request('https://ocr.test/v1/tools/ocr/sync', {
         method: 'POST',
         headers: { Authorization: 'Bearer dev-key' },
         body: form,
@@ -116,10 +115,10 @@ describe('gateway API', () => {
 
     expect(response.status).toBe(200);
     expect(requestUrl(fetchMock.mock.calls[0]![0]).pathname).toBe('/internal/ocr/image');
-    expect(requestUrl(fetchMock.mock.calls[0]![0]).searchParams.get('mode')).toBe('accurate');
+    expect(requestUrl(fetchMock.mock.calls[0]![0]).searchParams.get('mode')).toBe('medium');
     await expect(response.json()).resolves.toMatchObject({
       success: true,
-      data: { metadata: { ocrMode: 'accurate', requestedOcrMode: 'accurate', fallbackUsed: false } },
+      data: { metadata: { ocrMode: 'medium', requestedOcrMode: 'medium', fallbackUsed: false } },
     });
   });
 
@@ -130,7 +129,7 @@ describe('gateway API', () => {
     form.append('ocrMode', 'precise');
 
     const response = await handler.fetch(
-      new Request('https://ocr.test/v1/ocr/sync', {
+      new Request('https://ocr.test/v1/tools/ocr/sync', {
         method: 'POST',
         headers: { Authorization: 'Bearer dev-key' },
         body: form,
@@ -142,7 +141,7 @@ describe('gateway API', () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({
       success: false,
-      error: { code: 'VALIDATION_ERROR', message: 'ocrMode must be one of fast, balanced, accurate', retryable: false },
+      error: { code: 'VALIDATION_ERROR', message: 'ocrMode must be one of tiny, small, medium', retryable: false },
     });
   });
 
@@ -234,14 +233,81 @@ describe('gateway API', () => {
     expect(env.workflowCreates).toHaveLength(1);
   });
 
+  it('compresses images synchronously and returns binary output', async () => {
+    const env = fakeEnv();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(new Uint8Array([4, 5]), {
+        status: 200,
+        headers: {
+          'Content-Type': 'image/jpeg',
+          'X-Aleph-Tools-Filename': 'receipt.compressed.jpg',
+          'X-Aleph-Tools-Width': '300',
+          'X-Aleph-Tools-Height': '200',
+          'X-Aleph-Tools-Format': 'jpeg',
+          'X-Aleph-Tools-Original-Size-Bytes': '1500',
+          'X-Aleph-Tools-Quality': '75',
+          'X-Aleph-Tools-Target-Met': 'true',
+        },
+      })),
+    );
+    const form = new FormData();
+    form.append('file', await fixtureFile('images/receipt.png', 'image/png'));
+    form.append('targetSizeBytes', '900');
+    form.append('maxWidth', '300');
+
+    const response = await handler.fetch(
+      new Request('https://tools.test/v1/tools/image/compress/sync', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key' },
+        body: form,
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('image/jpeg');
+    expect(response.headers.get('content-disposition')).toContain('receipt.compressed.jpg');
+    expect(response.headers.get('X-Aleph-Tools-Target-Met')).toBe('true');
+  });
+
+  it('creates async image compression jobs with idempotency and tool metadata', async () => {
+    const env = fakeEnv();
+    const makeRequest = async () => {
+      const form = new FormData();
+      form.append('file', await fixtureFile('images/invoice-table.png', 'image/png'));
+      form.append('targetSizeBytes', '1200');
+      form.append('maxWidth', '800');
+      form.append('outputFormat', 'webp');
+      return handler.fetch(
+        new Request('https://tools.test/v1/tools/image/compress', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'compress-asset-123' },
+          body: form,
+        }),
+        env,
+        {} as ExecutionContext,
+      );
+    };
+
+    const first = (await (await makeRequest()).json()) as { data: { jobId: string; tool: string; operation: string } };
+    const second = (await (await makeRequest()).json()) as { data: { jobId: string } };
+
+    expect(first.data).toMatchObject({ tool: 'image.compress', operation: 'image.compress' });
+    expect(second.data.jobId).toBe(first.data.jobId);
+    expect(env.rows.get(first.data.jobId)?.tool_options_json).toContain('"targetSizeBytes":1200');
+    expect(env.workflowCreates).toHaveLength(1);
+  });
+
   it('creates async OCR jobs with mode and forwards it during processing', async () => {
     const env = fakeEnv();
     const form = new FormData();
     form.append('file', await fixtureFile('images/receipt.png', 'image/png'));
-    form.append('ocrMode', 'fast');
+    form.append('ocrMode', 'tiny');
 
     const createResponse = await handler.fetch(
-      new Request('https://ocr.test/v1/jobs', {
+      new Request('https://ocr.test/v1/tools/ocr', {
         method: 'POST',
         headers: { Authorization: 'Bearer dev-key' },
         body: form,
@@ -250,14 +316,14 @@ describe('gateway API', () => {
       {} as ExecutionContext,
     );
     const createBody = (await createResponse.json()) as { data: { jobId: string } };
-    expect(env.rows.get(createBody.data.jobId)?.tool_options_json).toBe('{"ocrMode":"fast"}');
+    expect(env.rows.get(createBody.data.jobId)?.tool_options_json).toBe('{"ocrMode":"tiny"}');
 
     const fetchMock = vi.fn(async (_input: unknown) => Response.json(sampleOcrResult()));
     vi.stubGlobal('fetch', fetchMock);
     await processJob(env, createBody.data.jobId);
 
     expect(requestUrl(fetchMock.mock.calls[0]![0]).pathname).toBe('/internal/ocr/image');
-    expect(requestUrl(fetchMock.mock.calls[0]![0]).searchParams.get('mode')).toBe('fast');
+    expect(requestUrl(fetchMock.mock.calls[0]![0]).searchParams.get('mode')).toBe('tiny');
   });
 
   it('queues async jobs through TOOLS_JOBS when workflow is not configured', async () => {
@@ -267,7 +333,7 @@ describe('gateway API', () => {
     form.append('file', await fixtureFile('images/receipt.png', 'image/png'));
 
     const response = await handler.fetch(
-      new Request('https://ocr.test/v1/jobs', {
+      new Request('https://ocr.test/v1/tools/ocr', {
         method: 'POST',
         headers: { Authorization: 'Bearer dev-key' },
         body: form,
@@ -289,7 +355,7 @@ describe('gateway API', () => {
     form.append('ocrMode', 'precise');
 
     const response = await handler.fetch(
-      new Request('https://ocr.test/v1/jobs', {
+      new Request('https://ocr.test/v1/tools/ocr', {
         method: 'POST',
         headers: { Authorization: 'Bearer dev-key' },
         body: form,
@@ -301,7 +367,7 @@ describe('gateway API', () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({
       success: false,
-      error: { code: 'VALIDATION_ERROR', message: 'ocrMode must be one of fast, balanced, accurate', retryable: false },
+      error: { code: 'VALIDATION_ERROR', message: 'ocrMode must be one of tiny, small, medium', retryable: false },
     });
   });
 
@@ -345,9 +411,9 @@ describe('gateway API', () => {
     const env = fakeEnv();
     const firstForm = new FormData();
     firstForm.append('file', await fixtureFile('images/receipt.png', 'image/png'));
-    firstForm.append('ocrMode', 'fast');
+    firstForm.append('ocrMode', 'tiny');
     const firstResponse = await handler.fetch(
-      new Request('https://ocr.test/v1/jobs', {
+      new Request('https://ocr.test/v1/tools/ocr', {
         method: 'POST',
         headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'ocr-mode-conflict' },
         body: firstForm,
@@ -359,9 +425,9 @@ describe('gateway API', () => {
 
     const secondForm = new FormData();
     secondForm.append('file', await fixtureFile('images/receipt.png', 'image/png'));
-    secondForm.append('ocrMode', 'accurate');
+    secondForm.append('ocrMode', 'medium');
     const conflictResponse = await handler.fetch(
-      new Request('https://ocr.test/v1/jobs', {
+      new Request('https://ocr.test/v1/tools/ocr', {
         method: 'POST',
         headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'ocr-mode-conflict' },
         body: secondForm,
@@ -382,7 +448,7 @@ describe('gateway API', () => {
     const firstForm = new FormData();
     firstForm.append('file', await fixtureFile('images/receipt.png', 'image/png'));
     const firstResponse = await handler.fetch(
-      new Request('https://ocr.test/v1/jobs', {
+      new Request('https://ocr.test/v1/tools/ocr', {
         method: 'POST',
         headers: { Authorization: 'Bearer dev-key' },
         body: firstForm,
@@ -395,7 +461,7 @@ describe('gateway API', () => {
     const secondForm = new FormData();
     secondForm.append('file', await fixtureFile('images/checklist-photo.png', 'image/png'));
     const limitedResponse = await handler.fetch(
-      new Request('https://ocr.test/v1/jobs', {
+      new Request('https://ocr.test/v1/tools/ocr', {
         method: 'POST',
         headers: { Authorization: 'Bearer dev-key' },
         body: secondForm,
@@ -495,7 +561,7 @@ describe('gateway API', () => {
     form.append('metadata', JSON.stringify({ documentId: 'doc_123' }));
 
     const createResponse = await handler.fetch(
-      new Request('https://ocr.test/v1/jobs', {
+      new Request('https://ocr.test/v1/tools/ocr', {
         method: 'POST',
         headers: { Authorization: 'Bearer dev-key' },
         body: form,
@@ -540,7 +606,7 @@ describe('gateway API', () => {
       const form = new FormData();
       form.append('file', await fixtureFile('images/receipt.png', 'image/png'));
       return handler.fetch(
-        new Request('https://ocr.test/v1/jobs', {
+        new Request('https://ocr.test/v1/tools/ocr', {
           method: 'POST',
           headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'upload-123' },
           body: form,
@@ -561,7 +627,7 @@ describe('gateway API', () => {
   it('rejects oversized Idempotency-Key values', async () => {
     const env = fakeEnv();
     const response = await handler.fetch(
-      new Request('https://ocr.test/v1/jobs', {
+      new Request('https://ocr.test/v1/tools/ocr', {
         method: 'POST',
         headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'x'.repeat(257), 'Content-Type': 'multipart/form-data' },
         body: new FormData(),
@@ -582,7 +648,7 @@ describe('gateway API', () => {
     const form = new FormData();
     form.append('file', await fixtureFile('images/checklist-photo.png', 'image/png'));
     const createResponse = await handler.fetch(
-      new Request('https://ocr.test/v1/jobs', {
+      new Request('https://ocr.test/v1/tools/ocr', {
         method: 'POST',
         headers: { Authorization: 'Bearer dev-key' },
         body: form,
@@ -615,7 +681,7 @@ describe('gateway API', () => {
     form.append('file', await fixtureFile('pdfs/mixed-two-page.pdf', 'application/pdf'));
 
     const createResponse = await handler.fetch(
-      new Request('https://ocr.test/v1/jobs', {
+      new Request('https://ocr.test/v1/tools/ocr', {
         method: 'POST',
         headers: { Authorization: 'Bearer dev-key' },
         body: form,
@@ -643,9 +709,9 @@ describe('gateway API', () => {
     const env = fakeEnv();
     const form = new FormData();
     form.append('file', await fixtureFile('pdfs/mixed-two-page.pdf', 'application/pdf'));
-    form.append('ocrMode', 'balanced');
+    form.append('ocrMode', 'small');
     const createResponse = await handler.fetch(
-      new Request('https://ocr.test/v1/jobs', {
+      new Request('https://ocr.test/v1/tools/ocr', {
         method: 'POST',
         headers: { Authorization: 'Bearer dev-key' },
         body: form,
@@ -663,7 +729,7 @@ describe('gateway API', () => {
       if (url.pathname === '/internal/ocr/pdf-batch') {
         expect(url.searchParams.get('start_page')).toBe('0');
         expect(url.searchParams.get('page_count')).toBe('2');
-        expect(url.searchParams.get('mode')).toBe('balanced');
+        expect(url.searchParams.get('mode')).toBe('small');
         return Response.json(samplePdfBatchResult());
       }
       throw new Error(`unexpected engine endpoint: ${url.pathname}`);
@@ -697,7 +763,7 @@ describe('gateway API', () => {
     const form = new FormData();
     form.append('file', await fixtureFile('pdfs/mixed-two-page.pdf', 'application/pdf'));
     const createResponse = await handler.fetch(
-      new Request('https://ocr.test/v1/jobs', {
+      new Request('https://ocr.test/v1/tools/ocr', {
         method: 'POST',
         headers: { Authorization: 'Bearer dev-key' },
         body: form,
@@ -732,7 +798,7 @@ describe('gateway API', () => {
     const form = new FormData();
     form.append('file', await fixtureFile('images/receipt.png', 'image/png'));
     const createResponse = await handler.fetch(
-      new Request('https://ocr.test/v1/jobs', {
+      new Request('https://ocr.test/v1/tools/ocr', {
         method: 'POST',
         headers: { Authorization: 'Bearer dev-key' },
         body: form,
@@ -794,7 +860,7 @@ describe('gateway API', () => {
     const form = new FormData();
     form.append('file', await fixtureFile('images/invoice-table.png', 'image/png'));
     const createResponse = await handler.fetch(
-      new Request('https://ocr.test/v1/jobs', {
+      new Request('https://ocr.test/v1/tools/ocr', {
         method: 'POST',
         headers: { Authorization: 'Bearer dev-key' },
         body: form,
@@ -825,7 +891,7 @@ describe('gateway API', () => {
     const form = new FormData();
     form.append('file', await fixtureFile('images/checklist-photo.png', 'image/png'));
     const createResponse = await handler.fetch(
-      new Request('https://ocr.test/v1/jobs', {
+      new Request('https://ocr.test/v1/tools/ocr', {
         method: 'POST',
         headers: { Authorization: 'Bearer dev-key' },
         body: form,
@@ -862,8 +928,8 @@ function samplePdfBatchResult(startPage = 0, pageCount = 2) {
       blocks: [{ text: `PDF page ${pageIndex + 1} recognized text with enough words`, confidence: 0.95 }],
       tables: [],
       confidence: 0.95,
-      ocrMode: pageIndex === 0 ? 'accurate' : 'balanced',
-      requestedOcrMode: 'balanced',
+      ocrMode: pageIndex === 0 ? 'medium' : 'small',
+      requestedOcrMode: 'small',
       fallbackUsed: pageIndex === 0,
       quality:
         pageIndex === 0
@@ -887,8 +953,8 @@ function samplePdfBatchResult(startPage = 0, pageCount = 2) {
     pages,
     plainText: pages.map((page) => page.text).join('\n\n'),
     markdown: pages.map((page) => `## Page ${page.pageIndex + 1}\n\n${page.text}`).join('\n\n'),
-    ocrMode: pages.some((page) => page.fallbackUsed) ? 'accurate' : 'balanced',
-    requestedOcrMode: 'balanced',
+    ocrMode: pages.some((page) => page.fallbackUsed) ? 'medium' : 'small',
+    requestedOcrMode: 'small',
     fallbackUsed: pages.some((page) => page.fallbackUsed),
     quality: { lowQuality: false, reasons: [], fallbackReasons: ['short_text', 'low_confidence'] },
     timingsMs: { requestedTotal: 21, fallbackTotal: 8, total: 29 },
