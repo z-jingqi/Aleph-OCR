@@ -22,20 +22,24 @@ The OCR engine container is not public API. External applications must call thes
 
 ## POST /v1/tools/image/pipeline
 
-Creates one async image pipeline job that runs conversion, compression, then OCR on the compressed output. This is the production image entrypoint.
+Creates one async image pipeline job. This is the production image OCR entrypoint.
+
+By default the pipeline performs necessary conversion, OCR-friendly image compression, then OCR. Conversion is skipped when the uploaded image is already OCR-native (`jpeg`, `jpg`, `png`, `tiff`, `tif`, or `bmp`). Compression can be disabled per request.
 
 Multipart fields:
 
-- `file`: PNG, JPEG, WebP, TIFF, BMP, HEIC, or HEIF image.
-- `pipeline`: JSON object string:
+- `file`: image upload. WebP, HEIC, and HEIF are accepted only when conversion is enabled.
+- `pipeline`: optional JSON object string. Defaults are shown below:
 
 ```json
 {
-  "convert": { "targetFormat": "webp", "width": 1200, "fit": "inside" },
-  "compress": { "outputFormat": "jpeg", "maxWidth": 1200, "minQuality": 45, "maxQuality": 85 },
+  "convert": { "enabled": true, "targetFormat": "jpeg", "fit": "inside" },
+  "compress": { "enabled": true, "outputFormat": "jpeg", "targetSizeBytes": 350000, "maxWidth": 1000, "maxHeight": 1000, "minQuality": 45, "maxQuality": 75 },
   "ocr": { "ocrMode": "small" }
 }
 ```
+
+For HEIC/HEIF and large phone-photo uploads, the Gateway applies a separate phone-photo default unless the caller overrides the relevant fields: `targetSizeBytes=350000`, `maxWidth=1200`, `maxHeight=1200`, and `maxQuality=72`. The OCR engine also applies an internal temporary max-side guard and light document crop for pipeline jobs; this does not change the standalone image compression tool output.
 
 - `callbackUrl`: optional HTTPS webhook URL for `ready`, `failed`, and `cancelled` notifications.
 - `metadata`: optional JSON object string echoed back in webhook payloads.
@@ -44,13 +48,13 @@ Required header:
 
 - `Idempotency-Key`: scoped to the authenticated client. Reusing the same key returns the original job.
 
-`GET /v1/jobs/:jobId/result` returns `tool: "image.pipeline"` with `converted`, `compressed`, and `ocr` fields. `GET /v1/jobs/:jobId/output` downloads the final compressed image.
+`GET /v1/jobs/:jobId/result` returns `tool: "image.pipeline"` with `converted.status`, `compressed.status`, final `output`, `ocr`, and pipeline `timingsMs` fields. `GET /v1/jobs/:jobId/output` downloads the final image used for OCR.
 
 ## POST /v1/tools/ocr/sync
 
 Synchronous image OCR. Disabled by default in production; set `ENABLE_SYNC_ENDPOINTS=true` only for local/debug environments. Multipart form field:
 
-- `file`: PNG, JPEG, WebP, TIFF, BMP, HEIC, or HEIF image.
+- `file`: JPEG, PNG, TIFF, or BMP image.
 - `ocrMode`: optional `tiny`, `small`, or `medium`; defaults to `small`.
 
 Limits:
@@ -62,7 +66,7 @@ Limits:
 
 Synchronous image conversion. Disabled by default in production; set `ENABLE_SYNC_ENDPOINTS=true` only for local/debug environments. Multipart form fields:
 
-- `file`: PNG, JPEG, WebP, TIFF, BMP, HEIC, or HEIF image.
+- `file`: image accepted by the conversion engine.
 - `targetFormat`: `png`, `jpeg`, `webp`, or `avif`.
 - `quality`: optional integer from 1 to 100.
 - `width` and `height`: optional positive integers.
@@ -74,8 +78,9 @@ Returns the converted binary image directly. `Content-Type` matches the target f
 
 Creates an OCR job. Multipart form field:
 
-- `file`: supported image or PDF.
+- `file`: PDF, JPEG, PNG, TIFF, or BMP. Use `/v1/tools/image/pipeline` for WebP, HEIC, or HEIF image OCR.
 - `ocrMode`: optional `tiny`, `small`, or `medium`; defaults to `small`.
+- `pdfExtractionMode`: optional `auto`, `text`, or `ocr`; defaults to `auto` and only applies to PDFs.
 - `callbackUrl`: optional HTTPS webhook URL for `ready`, `failed`, and `cancelled` notifications.
 - `metadata`: optional JSON object string echoed back in webhook payloads.
 
@@ -83,11 +88,26 @@ Optional header:
 
 - `Idempotency-Key`: scoped to the authenticated client. Reusing the same key returns the original job instead of creating another job.
 
-Images and PDFs are accepted. PDFs are always async and are processed page by page. The production target is 100 pages or fewer.
+OCR-native images and PDFs are accepted. PDFs are always async and are processed page by page. The production target is 100 pages or fewer.
+
+PDF extraction modes:
+
+- `auto`: default. Each page is inspected for an embedded text layer. Pages with usable text are extracted directly with PyMuPDF; scanned pages continue through PP-OCRv6. Mixed PDFs are supported.
+- `text`: requires every page to have usable embedded text. If any page has no usable text layer, the job fails instead of silently running OCR.
+- `ocr`: skips embedded text extraction and runs PP-OCRv6 for every page.
+
+For PDFs, ready OCR results include:
+
+- Top-level `extractionMethod`: `pdf_text`, `ocr`, or `mixed`.
+- Per-page `extractionMethod`: `pdf_text` or `ocr`.
+- `metadata.pdfExtractionMode` and `metadata.extractionMethod`.
+- `timingsMs.extractText` when embedded text was extracted.
+
+Embedded text extraction is a speed optimization, not table or document understanding. `tables` remains an empty array unless a future structured-document tool is added.
 
 ## POST /v1/tools/image/convert
 
-Creates an async image conversion job only when `ENABLE_LEGACY_IMAGE_ENDPOINTS=true`. Production clients should use `POST /v1/tools/image/pipeline`.
+Creates an async image conversion job. Use this when the caller needs image conversion without OCR.
 
 Async conversion results are stored in R2. `GET /v1/jobs/:jobId/result` returns metadata and `GET /v1/jobs/:jobId/output` downloads the converted binary file.
 
@@ -95,7 +115,7 @@ Async conversion results are stored in R2. `GET /v1/jobs/:jobId/result` returns 
 
 Synchronous image compression. Disabled by default in production; set `ENABLE_SYNC_ENDPOINTS=true` only for local/debug environments. Multipart form fields:
 
-- `file`: PNG, JPEG, WebP, TIFF, BMP, HEIC, or HEIF image.
+- `file`: image accepted by the compression engine.
 - `targetSizeBytes`: optional positive integer target.
 - `maxWidth` and `maxHeight`: optional positive integers; aspect ratio is preserved.
 - `minQuality` and `maxQuality`: optional integers from 1 to 100; defaults to 45 and 85.
@@ -105,7 +125,7 @@ Returns the compressed binary image directly. Compression does not trigger OCR.
 
 ## POST /v1/tools/image/compress
 
-Creates an async image compression job only when `ENABLE_LEGACY_IMAGE_ENDPOINTS=true`. Production clients should use `POST /v1/tools/image/pipeline`.
+Creates an async image compression job. Use this when the caller needs compression without OCR.
 
 Async compression results are stored in R2. `GET /v1/jobs/:jobId/result` returns compression metadata and `GET /v1/jobs/:jobId/output` downloads the compressed binary file.
 

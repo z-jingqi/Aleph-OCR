@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { compressImage, getEngineInfo, getPdfInfoFromObject, ocrImage, ocrPdfBatchFromObject } from '../src/ocr-client';
+import { compressImage, extractPdfTextBatchFromObject, getEngineInfo, getPdfInfoFromObject, ocrImage, ocrPdfBatchFromObject } from '../src/ocr-client';
 
 const engineInfo = {
   engine: 'paddleocr',
@@ -98,11 +98,13 @@ describe('tools engine client', () => {
     const globalFetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json(ocrResult));
     const file = new File(['abc'], 'receipt.png', { type: 'image/png' });
 
-    await ocrImage({ ALEPH_TOOLS_ENGINE_URL: 'https://engine.example.com' }, file, 'tiny');
+    await ocrImage({ ALEPH_TOOLS_ENGINE_URL: 'https://engine.example.com' }, file, 'tiny', { maxSide: 1200, documentCrop: true });
 
     const urls = globalFetch.mock.calls.map((call) => requestUrl(call[0]));
     expect(urls.map((url) => url.pathname)).toEqual(['/internal/ocr/image']);
     expect(urls[0].searchParams.get('mode')).toBe('tiny');
+    expect(urls[0].searchParams.get('max_side')).toBe('1200');
+    expect(urls[0].searchParams.get('document_crop')).toBe('true');
   });
 
   it('streams raw PDF bodies to internal info and batch endpoints', async () => {
@@ -110,7 +112,9 @@ describe('tools engine client', () => {
       const url = requestUrl(input);
       expect(init?.body).toBeInstanceOf(ReadableStream);
       expect(new Headers(init?.headers).get('Content-Type')).toBe('application/pdf');
-      if (url.pathname === '/internal/ocr/pdf-info') return Response.json({ pageCount: 7 });
+      if (url.pathname === '/internal/ocr/pdf-info') {
+        return Response.json({ pageCount: 7, pages: [{ pageIndex: 5, hasTextLayer: true, textLength: 120 }] });
+      }
       return Response.json({ ...ocrResult, document: { type: 'pdf', filename: 'mixed.pdf', mimeType: 'application/pdf', sizeBytes: 3 } });
     });
 
@@ -119,6 +123,7 @@ describe('tools engine client', () => {
 
     await expect(getPdfInfoFromObject({ ALEPH_TOOLS_ENGINE_URL: 'https://engine.example.com' }, infoObject, 'mixed.pdf')).resolves.toEqual({
       pageCount: 7,
+      pages: [{ pageIndex: 5, hasTextLayer: true, textLength: 120 }],
     });
     await expect(ocrPdfBatchFromObject({ ALEPH_TOOLS_ENGINE_URL: 'https://engine.example.com' }, batchObject, 'mixed.pdf', 5, 2, 'small')).resolves.toMatchObject({
       document: { type: 'pdf' },
@@ -130,6 +135,31 @@ describe('tools engine client', () => {
     expect(urls[1].searchParams.get('start_page')).toBe('5');
     expect(urls[1].searchParams.get('page_count')).toBe('2');
     expect(urls[1].searchParams.get('mode')).toBe('small');
+  });
+
+  it('streams raw PDF bodies to the internal text extraction endpoint', async () => {
+    const globalFetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestUrl(input);
+      expect(url.pathname).toBe('/internal/ocr/pdf-text-batch');
+      expect(init?.body).toBeInstanceOf(ReadableStream);
+      expect(new Headers(init?.headers).get('Content-Type')).toBe('application/pdf');
+      return Response.json({
+        ...ocrResult,
+        extractionMethod: 'pdf_text',
+        document: { type: 'pdf', filename: 'text.pdf', mimeType: 'application/pdf', sizeBytes: 3 },
+        pages: [{ ...ocrResult.pages[0], pageIndex: 2, extractionMethod: 'pdf_text', confidence: null }],
+      });
+    });
+
+    await expect(extractPdfTextBatchFromObject({ ALEPH_TOOLS_ENGINE_URL: 'https://engine.example.com' }, { body: new Blob(['pdf']).stream() }, 'text.pdf', 2, 1)).resolves.toMatchObject({
+      extractionMethod: 'pdf_text',
+      pages: [{ pageIndex: 2, extractionMethod: 'pdf_text' }],
+    });
+
+    const url = requestUrl(globalFetch.mock.calls[0]![0]);
+    expect(url.searchParams.get('filename')).toBe('text.pdf');
+    expect(url.searchParams.get('start_page')).toBe('2');
+    expect(url.searchParams.get('page_count')).toBe('1');
   });
 
   it('streams raw PDF batches through the internal container binding', async () => {

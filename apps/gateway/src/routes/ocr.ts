@@ -1,10 +1,11 @@
 import {
   MAX_SYNC_IMAGE_SIZE_BYTES,
   inferDocumentType,
-  isSupportedImageMime,
+  isOcrNativeImageFile,
   type OcrDocument,
 } from '@aleph-tools/shared';
 import { maxActiveJobsPerClient, syncEndpointsEnabled, workflowConfigured } from '../config';
+import { normalizeImageUploadFile } from '../http/file-types';
 import { buildIdempotencyFingerprint, normalizeIdempotencyKey } from '../http/idempotency';
 import { engineErrorResponse, jsonError, jsonSuccess, parsedUploadError } from '../http/responses';
 import { readUploadedFile } from '../http/uploads';
@@ -28,8 +29,9 @@ export function registerOcrRoutes(app: GatewayApp) {
     const parsed = await readUploadedFile(c.req.raw);
     if (!parsed.ok) return parsedUploadError(c, parsed);
 
-    const { file, ocrMode } = parsed;
-    if (!isSupportedImageMime(file.type)) {
+    const { ocrMode } = parsed;
+    const file = normalizeImageUploadFile(parsed.file);
+    if (!isOcrNativeImageFile(file.type, file.name)) {
       return jsonError(c, 'UNSUPPORTED_MEDIA_TYPE', 'Sync OCR only supports image files', 400, { retryable: false });
     }
     if (file.size > MAX_SYNC_IMAGE_SIZE_BYTES) {
@@ -60,11 +62,12 @@ export function registerOcrRoutes(app: GatewayApp) {
     const parsed = await readUploadedFile(c.req.raw);
     if (!parsed.ok) return parsedUploadError(c, parsed);
 
-    const { file, callbackUrl, metadata, ocrMode } = parsed;
-    const documentType = inferDocumentType(file.type);
+    const { callbackUrl, metadata, ocrMode, pdfExtractionMode } = parsed;
+    const documentType = inferDocumentType(parsed.file.type, parsed.file.name);
     if (!documentType) {
-      return jsonError(c, 'UNSUPPORTED_MEDIA_TYPE', `Unsupported file type: ${file.type || 'unknown'}`, 400, { retryable: false });
+      return jsonError(c, 'UNSUPPORTED_MEDIA_TYPE', `Unsupported file type: ${parsed.file.type || 'unknown'}`, 400, { retryable: false });
     }
+    const file = documentType === 'image' ? normalizeImageUploadFile(parsed.file) : parsed.file;
 
     const document: OcrDocument = {
       type: documentType,
@@ -74,7 +77,7 @@ export function registerOcrRoutes(app: GatewayApp) {
     };
 
     try {
-      const ocrOptions = { ocrMode };
+      const ocrOptions = documentType === 'pdf' ? { ocrMode, pdfExtractionMode } : { ocrMode };
       const fingerprint = await buildIdempotencyFingerprint(file, 'ocr', 'ocr', ocrOptions);
       if (idempotencyKey) {
         const existing = await getJobByIdempotencyKey(c.env, c.get('clientId'), idempotencyKey);

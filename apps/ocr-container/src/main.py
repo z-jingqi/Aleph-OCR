@@ -6,7 +6,7 @@ from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, 
 from fastapi.responses import JSONResponse, Response
 
 from .image_tools import SUPPORTED_INPUT_TYPES, compress_image_bytes, convert_image_bytes
-from .ocr import DEFAULT_OCR_MODE, engine_info, get_ocr, ocr_image_bytes, ocr_pdf_batch_bytes, pdf_info_bytes
+from .ocr import DEFAULT_OCR_MODE, engine_info, get_ocr, ocr_image_bytes, ocr_pdf_batch_bytes, pdf_info_bytes, pdf_text_batch_bytes
 
 app = FastAPI(title="Aleph Tools Engine", version="0.1.0")
 
@@ -29,6 +29,8 @@ def health():
 async def ocr_image(
     file: UploadFile = File(...),
     mode: str = Query(default=DEFAULT_OCR_MODE),
+    max_side: int | None = Query(default=None, ge=400, le=3200),
+    document_crop: bool = Query(default=False),
     x_aleph_tools_internal_token: str | None = Header(default=None),
 ):
     check_internal_token(x_aleph_tools_internal_token)
@@ -38,7 +40,7 @@ async def ocr_image(
     if len(content) > MAX_SYNC_IMAGE_SIZE_BYTES:
         raise HTTPException(status_code=413, detail="Image exceeds sync OCR size limit")
     try:
-        return JSONResponse(ocr_image_bytes(content, file.filename or "image", file.content_type or "image/png", mode))
+        return JSONResponse(ocr_image_bytes(content, file.filename or "image", file.content_type or "image/png", mode, max_side=max_side, document_crop=document_crop))
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -163,6 +165,23 @@ async def ocr_pdf_batch(
     content, resolved_filename = await read_pdf_payload(request, file, filename)
     try:
         return JSONResponse(ocr_pdf_batch_bytes(content, resolved_filename, "application/pdf", start_page, page_count, mode))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/internal/ocr/pdf-text-batch")
+async def pdf_text_batch(
+    request: Request,
+    start_page: int = Query(default=0, ge=0),
+    page_count: int = Query(default=1, ge=1),
+    filename: str | None = Query(default=None),
+    file: UploadFile | None = File(default=None),
+    x_aleph_tools_internal_token: str | None = Header(default=None),
+):
+    check_internal_token(x_aleph_tools_internal_token)
+    content, resolved_filename = await read_pdf_payload(request, file, filename)
+    try:
+        return JSONResponse(pdf_text_batch_bytes(content, resolved_filename, "application/pdf", start_page, page_count))
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 

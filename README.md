@@ -148,8 +148,7 @@ Create a production-style image pipeline job:
 curl -X POST http://127.0.0.1:8787/v1/tools/image/pipeline \
   -H 'Authorization: Bearer dev-key' \
   -H 'Idempotency-Key: sample-pipeline-001' \
-  -F 'file=@sample.png' \
-  -F 'pipeline={"convert":{"targetFormat":"webp","width":1200,"fit":"inside"},"compress":{"outputFormat":"jpeg","maxWidth":1200},"ocr":{"ocrMode":"small"}}'
+  -F 'file=@sample.png'
 ```
 
 For PDFs, create an async job:
@@ -163,7 +162,7 @@ curl -X POST http://127.0.0.1:8787/v1/tools/ocr \
 
 Async jobs can include `callbackUrl` and `metadata` multipart fields for webhook notifications. Use `Idempotency-Key` when retrying a create request. Control panels can subscribe to `GET /v1/jobs/:jobId/events` for SSE progress events, and callers can cancel work with `POST /v1/jobs/:jobId/cancel`.
 
-For images, use `POST /v1/tools/image/pipeline` with one upload and a JSON `pipeline` field. Once ready, `GET /v1/jobs/:jobId/result` returns conversion metadata, compression metadata, and OCR output; `GET /v1/jobs/:jobId/output` downloads the final compressed image.
+For image OCR, use `POST /v1/tools/image/pipeline` with one upload. The `pipeline` field is optional; defaults run necessary conversion, OCR-friendly compression, and OCR. Normal images default to long side `1000`; HEIC/HEIF and large phone-photo uploads default to long side `1200` unless the caller overrides `pipeline.compress`. Once ready, `GET /v1/jobs/:jobId/result` returns step status, output metadata, timings, and OCR output; `GET /v1/jobs/:jobId/output` downloads the final image used for OCR.
 
 ## Scripts
 

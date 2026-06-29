@@ -1,4 +1,4 @@
-import { ImageCompressOptionsSchema, ImageConvertOptionsSchema, ImagePipelineOptionsSchema, MAX_PDF_PAGES, PDF_BATCH_SIZE } from '@aleph-tools/shared';
+import { ImageCompressOptionsSchema, ImageConvertOptionsSchema, ImagePipelineOptionsSchema, MAX_PDF_PAGES, PDF_BATCH_SIZE, type ImagePipelineTimings } from '@aleph-tools/shared';
 import {
   claimJobForProcessing,
   claimJobPage,
@@ -20,11 +20,25 @@ import {
   updateJobProgress,
   type StoredJob,
 } from '../job-store';
-import { compressImage, convertImage, getPdfInfoFromObject, ocrImage, ocrPdfBatchFromObject } from '../ocr-client';
+import { compressImage, convertImage, extractPdfTextBatchFromObject, getPdfInfoFromObject, ocrImage, ocrPdfBatchFromObject, type PdfInfo } from '../ocr-client';
 import { maxJobAttempts } from '../config';
 import { deliverDueWebhooks } from '../webhooks';
 import type { Env, StorageEnv, WorkflowStepLike } from '../types';
-import { buildPdfResult, normalizePageResult, ocrModeForJob, withRequestedOcrModeMetadata } from './ocr-result';
+import { buildPdfResult, normalizePageResult, ocrModeForJob, pdfExtractionModeForJob, withRequestedOcrModeMetadata } from './ocr-result';
+import {
+  assertValidPipelineInput,
+  pipelineOcrEngineOptions,
+  pipelineOcrInputFile,
+  pipelineOcrInputMetadata,
+  pipelineOutputFromCompress,
+  pipelineOutputFromConvert,
+  pipelineOutputFromFile,
+  planPipelineCompression,
+  planPipelineConversion,
+  ranConvertStep,
+  skippedCompressStep,
+  skippedConvertStep,
+} from './image-pipeline';
 
 export async function processJob(env: Env, jobId: string) {
   requireStorage(env);
@@ -148,28 +162,75 @@ async function processImageCompressJob(env: StorageEnv, step: WorkflowStepLike, 
 }
 
 async function processImagePipelineJob(env: StorageEnv, step: WorkflowStepLike, job: StoredJob, file: File) {
+  const pipelineStarted = Date.now();
+  const timings: ImagePipelineTimings = {};
   const options = ImagePipelineOptionsSchema.parse(job.toolOptions ?? {});
-  job = await step.do(`image pipeline convert progress ${job.jobId}`, async () =>
-    updateJobProgress(env, job, { progress: 30, stage: 'converting', currentPage: 0, totalPages: 1 }),
-  );
-  await assertNotCancelled(env, job);
-  const converted = await step.do(`pipeline convert image ${job.jobId}`, async () => convertImage(env, file, options.convert));
+  assertValidPipelineInput(file, options);
+  const sourceBytes = await file.arrayBuffer();
+  let workingOutput = pipelineOutputFromFile(file, sourceBytes);
+  let converted = skippedConvertStep('conversion_disabled');
+  let compressed = skippedCompressStep('compression_disabled');
 
-  const convertedFile = new File([converted.bytes], converted.filename, { type: converted.mimeType });
-  job = await step.do(`image pipeline compress progress ${job.jobId}`, async () =>
-    updateJobProgress(env, job, { progress: 55, stage: 'compressing', currentPage: 0, totalPages: 1 }),
-  );
-  await assertNotCancelled(env, job);
-  const compressed = await step.do(`pipeline compress image ${job.jobId}`, async () => compressImage(env, convertedFile, options.compress));
+  const conversionPlan = planPipelineConversion(file, options);
+  converted = skippedConvertStep(conversionPlan.reason ?? 'conversion_skipped');
+  if (conversionPlan.shouldRun) {
+    job = await step.do(`image pipeline convert progress ${job.jobId}`, async () =>
+      updateJobProgress(env, job, { progress: 30, stage: 'converting', currentPage: 0, totalPages: 1 }),
+    );
+    await assertNotCancelled(env, job);
+    const conversion = await timed(timings, 'convertMs', () =>
+      step.do(`pipeline convert image ${job.jobId}`, async () => convertImage(env, file, options.convert)),
+    );
+    converted = ranConvertStep(conversion);
+    workingOutput = pipelineOutputFromConvert(conversion);
+  }
 
-  const compressedFile = new File([compressed.bytes], compressed.filename, { type: compressed.mimeType });
+  const compressionPlan = planPipelineCompression(options);
+  compressed = skippedCompressStep(compressionPlan.reason ?? 'compression_skipped');
+  if (compressionPlan.shouldRun) {
+    const compressionInput = pipelineOcrInputFile(workingOutput);
+    job = await step.do(`image pipeline compress progress ${job.jobId}`, async () =>
+      updateJobProgress(env, job, { progress: 55, stage: 'compressing', currentPage: 0, totalPages: 1 }),
+    );
+    await assertNotCancelled(env, job);
+    const compression = await timed(timings, 'compressMs', () =>
+      step.do(`pipeline compress image ${job.jobId}`, async () => compressImage(env, compressionInput, options.compress)),
+    );
+    workingOutput = pipelineOutputFromCompress(compression);
+    compressed = {
+      status: 'ran',
+      output: {
+        filename: compression.filename,
+        mimeType: compression.mimeType,
+        originalSizeBytes: compression.originalSizeBytes,
+        sizeBytes: compression.bytes.byteLength,
+        compressionRatio: compression.originalSizeBytes > 0 ? compression.bytes.byteLength / compression.originalSizeBytes : 0,
+        ...(compression.targetSizeBytes ? { targetSizeBytes: compression.targetSizeBytes } : {}),
+        targetMet: compression.targetMet,
+        width: compression.width,
+        height: compression.height,
+        format: compression.format,
+        quality: compression.quality,
+        resultUrl: `/v1/jobs/${job.jobId}/output`,
+      },
+    };
+  }
+
+  const ocrFile = pipelineOcrInputFile(workingOutput);
+  const ocrInput = pipelineOcrInputMetadata(workingOutput);
+  await assertNotCancelled(env, job);
   job = await step.do(`image pipeline ocr progress ${job.jobId}`, async () =>
     updateJobProgress(env, job, { progress: 80, stage: 'ocr', currentPage: 0, totalPages: 1 }),
   );
   await assertNotCancelled(env, job);
-  const ocr = await step.do(`pipeline ocr image ${job.jobId}`, async () =>
-    withRequestedOcrModeMetadata(await ocrImage(env, compressedFile, options.ocr.ocrMode), options.ocr.ocrMode),
+  const ocr = await timed(timings, 'ocrMs', () =>
+    step.do(`pipeline ocr image ${job.jobId}`, async () =>
+      withRequestedOcrModeMetadata(await ocrImage(env, ocrFile, options.ocr.ocrMode, pipelineOcrEngineOptions(options)), options.ocr.ocrMode),
+    ),
   );
+  timings.ocrPreprocessMs = numericTiming(ocr.timingsMs?.preprocess);
+  timings.ocrMs = numericTiming(ocr.timingsMs?.ocr) ?? timings.ocrMs;
+  timings.totalMs = Date.now() - pipelineStarted;
 
   job = await step.do(`store image pipeline progress ${job.jobId}`, async () =>
     updateJobProgress(env, job, { progress: 95, stage: 'storing_result', currentPage: 0, totalPages: 1 }),
@@ -178,23 +239,32 @@ async function processImagePipelineJob(env: StorageEnv, step: WorkflowStepLike, 
     setImagePipelineResult(
       env,
       job,
-      {
-        filename: converted.filename,
-        mimeType: converted.mimeType,
-        sizeBytes: converted.bytes.byteLength,
-        width: converted.width,
-        height: converted.height,
-        format: converted.format,
-      },
+      converted,
       compressed,
+      { ...ocrInput, bytes: workingOutput.bytes },
       ocr,
+      timings,
     ),
   );
   await deliverDueWebhooks(env);
 }
 
+async function timed<T>(timings: ImagePipelineTimings, key: keyof ImagePipelineTimings, fn: () => Promise<T>): Promise<T> {
+  const started = Date.now();
+  try {
+    return await fn();
+  } finally {
+    timings[key] = Date.now() - started;
+  }
+}
+
+function numericTiming(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
 async function processPdfJob(env: StorageEnv, step: WorkflowStepLike, job: StoredJob) {
   const ocrMode = ocrModeForJob(job);
+  const pdfExtractionMode = pdfExtractionModeForJob(job);
   job = await step.do(`plan pdf ${job.jobId}`, async () => updateJobProgress(env, job, { progress: 20, stage: 'planning_pages' }));
   const infoSource = await step.do(`load pdf info source ${job.jobId}`, async () => getSourceFile(env, job));
   if (!infoSource) throw new Error('Source file is missing');
@@ -216,17 +286,40 @@ async function processPdfJob(env: StorageEnv, step: WorkflowStepLike, job: Store
     }
     if (claimedPages.length === 0) continue;
     try {
-      const batchSource = await step.do(`load pdf batch source ${job.jobId} ${batchStart}`, async () => getSourceFile(env, job));
-      if (!batchSource) throw new Error('Source file is missing');
-      const batchResult = await step.do(`ocr pdf batch ${job.jobId} ${batchStart}-${batchEnd - 1}`, async () =>
-        ocrPdfBatchFromObject(env, batchSource, job.document.filename, batchStart, batchPageCount, ocrMode),
-      );
-      const pagesByIndex = new Map(batchResult.pages.map((page) => [page.pageIndex, page]));
-      for (const pageIndex of claimedPages) {
-        const batchPage = pagesByIndex.get(pageIndex);
-        if (!batchPage) throw new Error(`OCR engine returned no result for page ${pageIndex + 1}`);
-        const page = normalizePageResult({ ...batchResult, pages: [batchPage] }, pageIndex);
-        job = await step.do(`store page ${job.jobId} ${pageIndex}`, async () => setJobPageResult(env, job, page));
+      const textPages = claimedPages.filter((pageIndex) => shouldExtractPdfText(info, pageIndex, pdfExtractionMode));
+      const ocrPages = claimedPages.filter((pageIndex) => !textPages.includes(pageIndex));
+      if (pdfExtractionMode === 'text' && ocrPages.length > 0) {
+        throw new Error(`PDF text extraction requested but page ${ocrPages[0]! + 1} has no usable text layer`);
+      }
+
+      for (const span of contiguousSpans(textPages)) {
+        const textSource = await step.do(`load pdf text source ${job.jobId} ${span.start}`, async () => getSourceFile(env, job));
+        if (!textSource) throw new Error('Source file is missing');
+        const textResult = await step.do(`extract pdf text ${job.jobId} ${span.start}-${span.end}`, async () =>
+          extractPdfTextBatchFromObject(env, textSource, job.document.filename, span.start, span.count),
+        );
+        const pagesByIndex = new Map(textResult.pages.map((page) => [page.pageIndex, page]));
+        for (const pageIndex of span.pages) {
+          const batchPage = pagesByIndex.get(pageIndex);
+          if (!batchPage) throw new Error(`PDF text extractor returned no result for page ${pageIndex + 1}`);
+          const page = normalizePageResult({ ...textResult, pages: [batchPage] }, pageIndex);
+          job = await step.do(`store page ${job.jobId} ${pageIndex}`, async () => setJobPageResult(env, job, page));
+        }
+      }
+
+      for (const span of contiguousSpans(ocrPages)) {
+        const batchSource = await step.do(`load pdf batch source ${job.jobId} ${span.start}`, async () => getSourceFile(env, job));
+        if (!batchSource) throw new Error('Source file is missing');
+        const batchResult = await step.do(`ocr pdf batch ${job.jobId} ${span.start}-${span.end}`, async () =>
+          ocrPdfBatchFromObject(env, batchSource, job.document.filename, span.start, span.count, ocrMode),
+        );
+        const pagesByIndex = new Map(batchResult.pages.map((page) => [page.pageIndex, page]));
+        for (const pageIndex of span.pages) {
+          const batchPage = pagesByIndex.get(pageIndex);
+          if (!batchPage) throw new Error(`OCR engine returned no result for page ${pageIndex + 1}`);
+          const page = normalizePageResult({ ...batchResult, pages: [batchPage] }, pageIndex);
+          job = await step.do(`store page ${job.jobId} ${pageIndex}`, async () => setJobPageResult(env, job, page));
+        }
       }
     } catch (error) {
       await Promise.all(claimedPages.map((pageIndex) => failJobPage(env, job, pageIndex, error instanceof Error ? error.message : 'Page OCR failed')));
@@ -240,6 +333,28 @@ async function processPdfJob(env: StorageEnv, step: WorkflowStepLike, job: Store
   const result = buildPdfResult(job, pages);
   await step.do(`ready pdf ${job.jobId}`, async () => setJobResult(env, job, result));
   await deliverDueWebhooks(env);
+}
+
+function shouldExtractPdfText(info: PdfInfo, pageIndex: number, mode: 'auto' | 'text' | 'ocr'): boolean {
+  if (mode === 'ocr') return false;
+  const page = info.pages.find((entry) => entry.pageIndex === pageIndex);
+  return page?.hasTextLayer === true;
+}
+
+function contiguousSpans(pageIndexes: number[]): Array<{ start: number; end: number; count: number; pages: number[] }> {
+  const sorted = [...pageIndexes].sort((a, b) => a - b);
+  const spans: Array<{ start: number; end: number; count: number; pages: number[] }> = [];
+  for (const pageIndex of sorted) {
+    const last = spans.at(-1);
+    if (!last || pageIndex !== last.end + 1) {
+      spans.push({ start: pageIndex, end: pageIndex, count: 1, pages: [pageIndex] });
+    } else {
+      last.end = pageIndex;
+      last.count += 1;
+      last.pages.push(pageIndex);
+    }
+  }
+  return spans;
 }
 
 async function assertNotCancelled(env: StorageEnv, job: StoredJob) {

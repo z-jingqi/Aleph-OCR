@@ -20,6 +20,7 @@ from .pdf import (
     ocr_pdf_page_bytes,
     ocr_pdf_page_document_with_fallback,
     pdf_info_bytes,
+    pdf_text_batch_bytes,
     render_pdf_page,
 )
 from .image import ocr_image_bytes, ocr_image_path_once, ocr_image_path_with_fallback
@@ -46,6 +47,7 @@ __all__ = [
     "ocr_pdf_page_bytes",
     "ocr_pdf_page_document_with_fallback",
     "pdf_info_bytes",
+    "pdf_text_batch_bytes",
     "preload_ocr",
     "render_pdf_page",
 ]

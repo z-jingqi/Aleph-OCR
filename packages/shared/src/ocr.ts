@@ -7,6 +7,15 @@ export const OcrModeSchema = z.enum(OcrModeValues).default('small');
 export type OcrMode = z.infer<typeof OcrModeSchema>;
 export const DEFAULT_OCR_MODE: OcrMode = 'small';
 
+export const PdfExtractionModeValues = ['auto', 'text', 'ocr'] as const;
+export const PdfExtractionModeSchema = z.enum(PdfExtractionModeValues).default('auto');
+export type PdfExtractionMode = z.infer<typeof PdfExtractionModeSchema>;
+export const DEFAULT_PDF_EXTRACTION_MODE: PdfExtractionMode = 'auto';
+
+export const ExtractionMethodValues = ['pdf_text', 'ocr', 'mixed'] as const;
+export const ExtractionMethodSchema = z.enum(ExtractionMethodValues);
+export type ExtractionMethod = z.infer<typeof ExtractionMethodSchema>;
+
 export const OcrBlockSchema = z.object({
   text: z.string(),
   bbox: z.array(z.number()).optional(),
@@ -32,8 +41,12 @@ export const OcrPageSchema = z.object({
   ocrMode: OcrModeSchema.optional(),
   requestedOcrMode: OcrModeSchema.optional(),
   fallbackUsed: z.boolean().optional(),
+  extractionMethod: z.enum(['pdf_text', 'ocr']).optional(),
   preprocessedWidth: z.number().int().positive().optional(),
   preprocessedHeight: z.number().int().positive().optional(),
+  ocrInputMaxSide: z.number().int().positive().optional(),
+  documentCropApplied: z.boolean().optional(),
+  documentCropBbox: z.array(z.number()).optional(),
   quality: z.unknown().optional(),
   timingsMs: z.record(z.number().nonnegative()).optional(),
 });
@@ -59,6 +72,7 @@ export type OcrQuality = z.infer<typeof OcrQualitySchema>;
 export const OcrTimingsMsSchema = z.object({
   decode: z.number().nonnegative().optional(),
   preprocess: z.number().nonnegative().optional(),
+  extractText: z.number().nonnegative().optional(),
   modelInit: z.number().nonnegative().optional(),
   ocr: z.number().nonnegative().optional(),
   normalize: z.number().nonnegative().optional(),
@@ -71,6 +85,8 @@ export type OcrTimingsMs = z.infer<typeof OcrTimingsMsSchema>;
 export const OcrResultMetadataSchema = z.object({
   ocrMode: OcrModeSchema.optional(),
   requestedOcrMode: OcrModeSchema.optional(),
+  pdfExtractionMode: PdfExtractionModeSchema.optional(),
+  extractionMethod: ExtractionMethodSchema.optional(),
   fallbackUsed: z.boolean().optional(),
   quality: OcrQualitySchema.optional(),
   timingsMs: OcrTimingsMsSchema.optional(),
@@ -88,6 +104,7 @@ export const OcrResultSchema = z.object({
   markdown: z.string(),
   ocrMode: OcrModeSchema.optional(),
   requestedOcrMode: OcrModeSchema.optional(),
+  extractionMethod: ExtractionMethodSchema.optional(),
   fallbackUsed: z.boolean().optional(),
   quality: OcrQualitySchema.optional(),
   timingsMs: OcrTimingsMsSchema.optional(),

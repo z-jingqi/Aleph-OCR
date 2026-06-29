@@ -49,10 +49,9 @@ describe('gateway API', () => {
     });
   });
 
-  it('disables sync and standalone image endpoints unless explicitly enabled', async () => {
+  it('disables sync endpoints but keeps async image tools enabled', async () => {
     const env = fakeEnv();
     delete env.ENABLE_SYNC_ENDPOINTS;
-    delete env.ENABLE_LEGACY_IMAGE_ENDPOINTS;
 
     const syncForm = new FormData();
     syncForm.append('file', await fixtureFile('images/receipt.png', 'image/png'));
@@ -66,23 +65,23 @@ describe('gateway API', () => {
       {} as ExecutionContext,
     );
 
-    const legacyForm = new FormData();
-    legacyForm.append('file', await fixtureFile('images/receipt.png', 'image/png'));
-    legacyForm.append('targetFormat', 'webp');
-    const legacyResponse = await handler.fetch(
+    const convertForm = new FormData();
+    convertForm.append('file', await fixtureFile('images/receipt.png', 'image/png'));
+    convertForm.append('targetFormat', 'webp');
+    const convertResponse = await handler.fetch(
       new Request('https://tools.test/v1/tools/image/convert', {
         method: 'POST',
-        headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'legacy-disabled' },
-        body: legacyForm,
+        headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'convert-enabled' },
+        body: convertForm,
       }),
       env,
       {} as ExecutionContext,
     );
 
     expect(syncResponse.status).toBe(400);
-    expect(legacyResponse.status).toBe(400);
+    expect(convertResponse.status).toBe(202);
     await expect(syncResponse.json()).resolves.toMatchObject({ success: false, error: { code: 'VALIDATION_ERROR' } });
-    await expect(legacyResponse.json()).resolves.toMatchObject({ success: false, error: { code: 'VALIDATION_ERROR' } });
+    await expect(convertResponse.json()).resolves.toMatchObject({ success: true, data: { tool: 'image.convert' } });
   });
 
   it('returns engine OCR modes and mode config', async () => {
@@ -373,9 +372,41 @@ describe('gateway API', () => {
 
     expect(first.data).toMatchObject({ tool: 'image.pipeline', operation: 'image.pipeline' });
     expect(second.data.jobId).toBe(first.data.jobId);
-    expect(env.rows.get(first.data.jobId)?.tool_options_json).toContain('"targetFormat":"webp"');
+    expect(env.rows.get(first.data.jobId)?.tool_options_json).toContain('"targetFormat":"jpeg"');
+    expect(env.rows.get(first.data.jobId)?.tool_options_json).toContain('"enabled":true');
+    expect(env.rows.get(first.data.jobId)?.tool_options_json).toContain('"targetSizeBytes":350000');
+    expect(env.rows.get(first.data.jobId)?.tool_options_json).toContain('"maxWidth":1000');
+    expect(env.rows.get(first.data.jobId)?.tool_options_json).toContain('"maxQuality":75');
     expect(env.workflowCreates).toHaveLength(0);
     expect(env.queueMessages).toEqual([{ jobId: first.data.jobId }]);
+  });
+
+  it('uses aggressive default compression for HEIC image pipeline uploads without overriding explicit fields', async () => {
+    const env = fakeEnv();
+    const heicFile = new File([new Uint8Array(128)], 'receipt.heic', { type: 'image/heic' });
+    const response = await handler.fetch(
+      new Request('https://tools.test/v1/tools/image/pipeline', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'pipeline-heic-defaults' },
+        body: await pipelineForm({
+          file: heicFile,
+          pipeline: { compress: { maxWidth: 1800 }, ocr: { ocrMode: 'small' } },
+        }),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(response.status).toBe(202);
+    const body = (await response.json()) as { data: { jobId: string } };
+    const options = JSON.parse(env.rows.get(body.data.jobId)?.tool_options_json ?? '{}') as { compress: Record<string, unknown> };
+
+    expect(options.compress).toMatchObject({
+      enabled: true,
+      targetSizeBytes: 350000,
+      maxWidth: 1800,
+      maxHeight: 1200,
+      maxQuality: 72,
+    });
   });
 
   it('returns image pipeline idempotency conflicts for changed options', async () => {
@@ -395,7 +426,7 @@ describe('gateway API', () => {
       new Request('https://tools.test/v1/tools/image/pipeline', {
         method: 'POST',
         headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'pipeline-conflict' },
-        body: await pipelineForm({ pipeline: { convert: { targetFormat: 'jpeg' }, compress: { outputFormat: 'jpeg' }, ocr: { ocrMode: 'small' } } }),
+        body: await pipelineForm({ pipeline: { compress: { enabled: false }, ocr: { ocrMode: 'small' } } }),
       }),
       env,
       {} as ExecutionContext,
@@ -424,6 +455,29 @@ describe('gateway API', () => {
     await expect(response.json()).resolves.toMatchObject({
       success: false,
       error: { code: 'VALIDATION_ERROR', retryable: false },
+    });
+  });
+
+  it('rejects non-OCR-native pipeline images when conversion is disabled', async () => {
+    const env = fakeEnv();
+    const response = await handler.fetch(
+      new Request('https://tools.test/v1/tools/image/pipeline', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'pipeline-heic-no-convert' },
+        body: await pipelineForm({
+          file: new File([new Uint8Array([1, 2, 3])], 'receipt.heic', { type: 'image/heic' }),
+          pipeline: { convert: { enabled: false }, compress: { enabled: false }, ocr: { ocrMode: 'small' } },
+        }),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+
+    expect(response.status).toBe(400);
+    expect(env.rows.size).toBe(0);
+    await expect(response.json()).resolves.toMatchObject({
+      success: false,
+      error: { code: 'UNSUPPORTED_FORMAT', retryable: false },
     });
   });
 
@@ -460,13 +514,14 @@ describe('gateway API', () => {
     });
   });
 
-  it('processes image pipeline jobs in convert, compress, OCR order', async () => {
+  it('processes non-native image pipeline jobs in convert, compress, OCR order', async () => {
     const env = fakeEnv();
+    const webpFile = new File([await fixtureFile('images/receipt.png', 'image/png')], 'receipt.webp', { type: 'image/webp' });
     const createResponse = await handler.fetch(
       new Request('https://tools.test/v1/tools/image/pipeline', {
         method: 'POST',
         headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'pipeline-process' },
-        body: await pipelineForm({ metadata: { assetId: 'asset_456' } }),
+        body: await pipelineForm({ file: webpFile, metadata: { assetId: 'asset_456' } }),
       }),
       env,
       {} as ExecutionContext,
@@ -510,6 +565,9 @@ describe('gateway API', () => {
     await processJob(env, createBody.data.jobId);
 
     expect(seenPaths).toEqual(['/internal/image/convert', '/internal/image/compress', '/internal/ocr/image']);
+    const ocrUrl = requestUrl((globalThis.fetch as unknown as { mock: { calls: Array<[unknown]> } }).mock.calls[2]![0]);
+    expect(ocrUrl.searchParams.get('max_side')).toBe('1400');
+    expect(ocrUrl.searchParams.get('document_crop')).toBe('true');
     const resultResponse = await handler.fetch(
       new Request(`https://tools.test/v1/jobs/${createBody.data.jobId}/result`, {
         headers: { Authorization: 'Bearer dev-key' },
@@ -517,11 +575,109 @@ describe('gateway API', () => {
       env,
       {} as ExecutionContext,
     );
-    const result = (await resultResponse.json()) as { data: { tool: string; converted: unknown; compressed: { filename: string }; ocr: unknown } };
+    const result = (await resultResponse.json()) as { data: { tool: string; converted: { status: string; output: unknown }; compressed: { status: string; output: { filename: string } }; output: { filename: string }; ocr: unknown; timingsMs: Record<string, number> } };
     expect(result.data.tool).toBe('image.pipeline');
-    expect(result.data.converted).toMatchObject({ filename: 'receipt.webp', sizeBytes: 3 });
-    expect(result.data.compressed).toMatchObject({ filename: 'receipt.compressed.jpg', sizeBytes: 2 });
+    expect(result.data.converted).toMatchObject({ status: 'ran', output: { filename: 'receipt.webp', sizeBytes: 3 } });
+    expect(result.data.compressed).toMatchObject({ status: 'ran', output: { filename: 'receipt.compressed.jpg', sizeBytes: 2 } });
+    expect(result.data.output).toMatchObject({ filename: 'receipt.compressed.jpg', sizeBytes: 2 });
+    expect(result.data.timingsMs).toMatchObject({ convertMs: expect.any(Number), compressMs: expect.any(Number), ocrMs: expect.any(Number), totalMs: expect.any(Number) });
     expect(env.rows.get(createBody.data.jobId)?.output_r2_key).toContain('receipt.compressed.jpg');
+  });
+
+  it('skips default pipeline conversion for OCR-native images but still compresses before OCR', async () => {
+    const env = fakeEnv();
+    const createResponse = await handler.fetch(
+      new Request('https://tools.test/v1/tools/image/pipeline', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'pipeline-native-default' },
+        body: await pipelineForm(),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    const createBody = (await createResponse.json()) as { data: { jobId: string } };
+    const seenPaths: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url = requestUrl(input);
+        seenPaths.push(url.pathname);
+        if (url.pathname === '/internal/image/compress') {
+          return new Response(new Uint8Array([4, 5]), {
+            headers: {
+              'Content-Type': 'image/jpeg',
+              'X-Aleph-Tools-Filename': 'receipt.compressed.jpg',
+              'X-Aleph-Tools-Width': '300',
+              'X-Aleph-Tools-Height': '200',
+              'X-Aleph-Tools-Format': 'jpeg',
+              'X-Aleph-Tools-Original-Size-Bytes': '10',
+              'X-Aleph-Tools-Quality': '72',
+              'X-Aleph-Tools-Target-Met': 'true',
+            },
+          });
+        }
+        return Response.json(sampleOcrResult({ type: 'image', filename: 'receipt.compressed.jpg', mimeType: 'image/jpeg', sizeBytes: 2 }));
+      }),
+    );
+
+    await processJob(env, createBody.data.jobId);
+
+    expect(seenPaths).toEqual(['/internal/image/compress', '/internal/ocr/image']);
+    const ocrUrl = requestUrl((globalThis.fetch as unknown as { mock: { calls: Array<[unknown]> } }).mock.calls[1]![0]);
+    expect(ocrUrl.searchParams.get('max_side')).toBe('1400');
+    expect(ocrUrl.searchParams.get('document_crop')).toBe('true');
+    const resultResponse = await handler.fetch(
+      new Request(`https://tools.test/v1/jobs/${createBody.data.jobId}/result`, {
+        headers: { Authorization: 'Bearer dev-key' },
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    const result = (await resultResponse.json()) as { data: { converted: { status: string }; compressed: { status: string }; output: { filename: string } } };
+    expect(result.data.converted).toMatchObject({ status: 'skipped' });
+    expect(result.data.compressed).toMatchObject({ status: 'ran' });
+    expect(result.data.output).toMatchObject({ filename: 'receipt.compressed.jpg' });
+  });
+
+  it('skips pipeline conversion for OCR-native images and can skip compression', async () => {
+    const env = fakeEnv();
+    const createResponse = await handler.fetch(
+      new Request('https://tools.test/v1/tools/image/pipeline', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'pipeline-skip-steps' },
+        body: await pipelineForm({ pipeline: { compress: { enabled: false }, ocr: { ocrMode: 'small' } } }),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    const createBody = (await createResponse.json()) as { data: { jobId: string } };
+    const seenPaths: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url = requestUrl(input);
+        seenPaths.push(url.pathname);
+        return Response.json(sampleOcrResult({ type: 'image', filename: 'receipt.png', mimeType: 'image/png', sizeBytes: 1 }));
+      }),
+    );
+
+    await processJob(env, createBody.data.jobId);
+
+    expect(seenPaths).toEqual(['/internal/ocr/image']);
+    const ocrUrl = requestUrl((globalThis.fetch as unknown as { mock: { calls: Array<[unknown]> } }).mock.calls[0]![0]);
+    expect(ocrUrl.searchParams.get('max_side')).toBe('1400');
+    expect(ocrUrl.searchParams.get('document_crop')).toBe('true');
+    const resultResponse = await handler.fetch(
+      new Request(`https://tools.test/v1/jobs/${createBody.data.jobId}/result`, {
+        headers: { Authorization: 'Bearer dev-key' },
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    const result = (await resultResponse.json()) as { data: { converted: { status: string }; compressed: { status: string }; output: { filename: string }; ocr: unknown } };
+    expect(result.data.converted).toMatchObject({ status: 'skipped' });
+    expect(result.data.compressed).toMatchObject({ status: 'skipped' });
+    expect(result.data.output).toMatchObject({ filename: 'receipt.png' });
   });
 
   it('creates async OCR jobs with mode and forwards it during processing', async () => {
@@ -593,6 +749,50 @@ describe('gateway API', () => {
       success: false,
       error: { code: 'VALIDATION_ERROR', message: 'ocrMode must be one of tiny, small, medium', retryable: false },
     });
+  });
+
+  it('rejects invalid PDF extraction modes with a structured validation error', async () => {
+    const env = fakeEnv();
+    const form = new FormData();
+    form.append('file', await fixtureFile('pdfs/mixed-two-page.pdf', 'application/pdf'));
+    form.append('pdfExtractionMode', 'structure');
+
+    const response = await handler.fetch(
+      new Request('https://ocr.test/v1/tools/ocr', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key' },
+        body: form,
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'pdfExtractionMode must be one of auto, text, ocr', retryable: false },
+    });
+  });
+
+  it('ignores PDF extraction mode fields for image OCR requests', async () => {
+    const env = fakeEnv();
+    const form = new FormData();
+    form.append('file', await fixtureFile('images/receipt.png', 'image/png'));
+    form.append('pdfExtractionMode', 'structure');
+
+    const response = await handler.fetch(
+      new Request('https://ocr.test/v1/tools/ocr', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key' },
+        body: form,
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+
+    const body = (await response.json()) as { data: { jobId: string } };
+    expect(response.status).toBe(202);
+    expect(env.rows.get(body.data.jobId)?.tool_options_json).toBe('{"ocrMode":"small"}');
   });
 
   it('returns idempotency conflict when the same key is reused with different input', async () => {
@@ -949,7 +1149,7 @@ describe('gateway API', () => {
       const url = requestUrl(input);
       expect(init?.body).toBeInstanceOf(ReadableStream);
       expect(new Headers(init?.headers).get('Content-Type')).toBe('application/pdf');
-      if (url.pathname === '/internal/ocr/pdf-info') return Response.json({ pageCount: 2 });
+      if (url.pathname === '/internal/ocr/pdf-info') return Response.json(pdfInfo(2, []));
       if (url.pathname === '/internal/ocr/pdf-batch') {
         expect(url.searchParams.get('start_page')).toBe('0');
         expect(url.searchParams.get('page_count')).toBe('2');
@@ -974,12 +1174,210 @@ describe('gateway API', () => {
       {} as ExecutionContext,
     );
     expect(resultResponse.status).toBe(200);
-    const resultBody = (await resultResponse.json()) as { data: { fallbackUsed: boolean; quality: { fallbackReasons: string[]; lowQualityPageCount: number }; timingsMs: Record<string, number> } };
+    const resultBody = (await resultResponse.json()) as { data: { extractionMethod: string; fallbackUsed: boolean; quality: { fallbackReasons: string[]; lowQualityPageCount: number }; timingsMs: Record<string, number>; metadata: Record<string, unknown> } };
+    expect(resultBody.data.extractionMethod).toBe('ocr');
+    expect(resultBody.data.metadata.pdfExtractionMode).toBe('auto');
     expect(resultBody.data.fallbackUsed).toBe(true);
     expect(resultBody.data.quality.fallbackReasons).toEqual(expect.arrayContaining(['short_text', 'low_confidence']));
     expect(resultBody.data.quality.lowQualityPageCount).toBe(1);
     expect(resultBody.data.timingsMs.requestedTotal).toBe(21);
     expect(resultBody.data.timingsMs.fallbackTotal).toBe(8);
+  });
+
+  it('extracts text-layer PDFs without calling OCR batches in auto mode', async () => {
+    const env = fakeEnv();
+    const form = new FormData();
+    form.append('file', await fixtureFile('pdfs/mixed-two-page.pdf', 'application/pdf'));
+    const createResponse = await handler.fetch(
+      new Request('https://ocr.test/v1/tools/ocr', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key' },
+        body: form,
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    const createBody = (await createResponse.json()) as { data: { jobId: string } };
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url.pathname === '/internal/ocr/pdf-info') return Response.json(pdfInfo(2, [0, 1]));
+      if (url.pathname === '/internal/ocr/pdf-text-batch') {
+        expect(url.searchParams.get('start_page')).toBe('0');
+        expect(url.searchParams.get('page_count')).toBe('2');
+        return Response.json(samplePdfTextBatchResult(0, 2));
+      }
+      throw new Error(`unexpected engine endpoint: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await processJob(env, createBody.data.jobId);
+
+    expect(fetchMock.mock.calls.map((call) => requestUrl(call[0]).pathname)).toEqual(['/internal/ocr/pdf-info', '/internal/ocr/pdf-text-batch']);
+    const resultResponse = await handler.fetch(
+      new Request(`https://ocr.test/v1/jobs/${createBody.data.jobId}/result`, {
+        headers: { Authorization: 'Bearer dev-key' },
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    const resultBody = (await resultResponse.json()) as { data: { extractionMethod: string; pages: Array<{ extractionMethod: string }>; timingsMs: Record<string, number> } };
+    expect(resultBody.data.extractionMethod).toBe('pdf_text');
+    expect(resultBody.data.pages.every((page) => page.extractionMethod === 'pdf_text')).toBe(true);
+    expect(resultBody.data.timingsMs.extractText).toBe(4);
+  });
+
+  it('processes mixed PDFs with text extraction and OCR in one job', async () => {
+    const env = fakeEnv();
+    const form = new FormData();
+    form.append('file', await fixtureFile('pdfs/mixed-two-page.pdf', 'application/pdf'));
+    const createResponse = await handler.fetch(
+      new Request('https://ocr.test/v1/tools/ocr', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key' },
+        body: form,
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    const createBody = (await createResponse.json()) as { data: { jobId: string } };
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url.pathname === '/internal/ocr/pdf-info') return Response.json(pdfInfo(2, [0]));
+      if (url.pathname === '/internal/ocr/pdf-text-batch') {
+        expect(url.searchParams.get('start_page')).toBe('0');
+        expect(url.searchParams.get('page_count')).toBe('1');
+        return Response.json(samplePdfTextBatchResult(0, 1));
+      }
+      if (url.pathname === '/internal/ocr/pdf-batch') {
+        expect(url.searchParams.get('start_page')).toBe('1');
+        expect(url.searchParams.get('page_count')).toBe('1');
+        return Response.json(samplePdfBatchResult(1, 1));
+      }
+      throw new Error(`unexpected engine endpoint: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await processJob(env, createBody.data.jobId);
+
+    expect(fetchMock.mock.calls.map((call) => requestUrl(call[0]).pathname)).toEqual([
+      '/internal/ocr/pdf-info',
+      '/internal/ocr/pdf-text-batch',
+      '/internal/ocr/pdf-batch',
+    ]);
+    const resultResponse = await handler.fetch(
+      new Request(`https://ocr.test/v1/jobs/${createBody.data.jobId}/result`, {
+        headers: { Authorization: 'Bearer dev-key' },
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    const resultBody = (await resultResponse.json()) as { data: { extractionMethod: string; pages: Array<{ extractionMethod: string }> } };
+    expect(resultBody.data.extractionMethod).toBe('mixed');
+    expect(resultBody.data.pages.map((page) => page.extractionMethod)).toEqual(['pdf_text', 'ocr']);
+  });
+
+  it('honors pdfExtractionMode=ocr by skipping text extraction', async () => {
+    const env = fakeEnv();
+    const form = new FormData();
+    form.append('file', await fixtureFile('pdfs/mixed-two-page.pdf', 'application/pdf'));
+    form.append('pdfExtractionMode', 'ocr');
+    const createResponse = await handler.fetch(
+      new Request('https://ocr.test/v1/tools/ocr', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key' },
+        body: form,
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    const createBody = (await createResponse.json()) as { data: { jobId: string } };
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url.pathname === '/internal/ocr/pdf-info') return Response.json(pdfInfo(1, [0]));
+      if (url.pathname === '/internal/ocr/pdf-batch') return Response.json(samplePdfBatchResult(0, 1));
+      throw new Error(`unexpected engine endpoint: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await processJob(env, createBody.data.jobId);
+
+    expect(fetchMock.mock.calls.map((call) => requestUrl(call[0]).pathname)).toEqual(['/internal/ocr/pdf-info', '/internal/ocr/pdf-batch']);
+    const resultResponse = await handler.fetch(
+      new Request(`https://ocr.test/v1/jobs/${createBody.data.jobId}/result`, {
+        headers: { Authorization: 'Bearer dev-key' },
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    const resultBody = (await resultResponse.json()) as { data: { extractionMethod: string; metadata: Record<string, unknown> } };
+    expect(resultBody.data.extractionMethod).toBe('ocr');
+    expect(resultBody.data.metadata.pdfExtractionMode).toBe('ocr');
+  });
+
+  it('fails text-only PDF extraction when a page has no usable text layer', async () => {
+    const env = fakeEnv({ MAX_JOB_ATTEMPTS: '1' });
+    const form = new FormData();
+    form.append('file', await fixtureFile('pdfs/mixed-two-page.pdf', 'application/pdf'));
+    form.append('pdfExtractionMode', 'text');
+    const createResponse = await handler.fetch(
+      new Request('https://ocr.test/v1/tools/ocr', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key' },
+        body: form,
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    const createBody = (await createResponse.json()) as { data: { jobId: string } };
+
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json(pdfInfo(2, [0]))));
+
+    await processJob(env, createBody.data.jobId);
+
+    expect(env.rows.get(createBody.data.jobId)).toMatchObject({
+      status: 'failed',
+      result_r2_key: null,
+    });
+    expect(env.rows.get(createBody.data.jobId)?.error).toContain('has no usable text layer');
+  });
+
+  it('includes pdfExtractionMode in OCR idempotency fingerprints', async () => {
+    const env = fakeEnv();
+    const firstForm = new FormData();
+    firstForm.append('file', await fixtureFile('pdfs/mixed-two-page.pdf', 'application/pdf'));
+    firstForm.append('pdfExtractionMode', 'auto');
+    const firstResponse = await handler.fetch(
+      new Request('https://ocr.test/v1/tools/ocr', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'pdf-extraction-conflict' },
+        body: firstForm,
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(firstResponse.status).toBe(202);
+
+    const secondForm = new FormData();
+    secondForm.append('file', await fixtureFile('pdfs/mixed-two-page.pdf', 'application/pdf'));
+    secondForm.append('pdfExtractionMode', 'ocr');
+    const conflictResponse = await handler.fetch(
+      new Request('https://ocr.test/v1/tools/ocr', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'pdf-extraction-conflict' },
+        body: secondForm,
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+
+    expect(conflictResponse.status).toBe(409);
+    await expect(conflictResponse.json()).resolves.toMatchObject({
+      success: false,
+      error: { code: 'IDEMPOTENCY_CONFLICT', retryable: false },
+    });
   });
 
   it('stops async PDF processing between batches when cancellation is requested', async () => {
@@ -999,7 +1397,7 @@ describe('gateway API', () => {
 
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = requestUrl(input);
-      if (url.pathname === '/internal/ocr/pdf-info') return Response.json({ pageCount: 6 });
+      if (url.pathname === '/internal/ocr/pdf-info') return Response.json(pdfInfo(6, []));
       if (url.pathname === '/internal/ocr/pdf-batch') {
         expect(url.searchParams.get('start_page')).toBe('0');
         const row = env.rows.get(createBody.data.jobId)!;
@@ -1142,21 +1540,58 @@ function requestUrl(input: unknown): URL {
 }
 
 async function pipelineForm(options: {
+  file?: File;
   pipeline?: unknown;
   metadata?: Record<string, unknown>;
 } = {}) {
   const form = new FormData();
-  form.append('file', await fixtureFile('images/receipt.png', 'image/png'));
-  form.append(
-    'pipeline',
-    JSON.stringify(options.pipeline ?? {
-      convert: { targetFormat: 'webp', width: 320, fit: 'inside' },
-      compress: { outputFormat: 'jpeg', maxWidth: 300, minQuality: 50, maxQuality: 80 },
-      ocr: { ocrMode: 'small' },
-    }),
-  );
+  form.append('file', options.file ?? await fixtureFile('images/receipt.png', 'image/png'));
+  if ('pipeline' in options) form.append('pipeline', JSON.stringify(options.pipeline));
   if (options.metadata) form.append('metadata', JSON.stringify(options.metadata));
   return form;
+}
+
+function pdfInfo(pageCount: number, textPages: number[]) {
+  return {
+    pageCount,
+    pages: Array.from({ length: pageCount }, (_, pageIndex) => ({
+      pageIndex,
+      hasTextLayer: textPages.includes(pageIndex),
+      textLength: textPages.includes(pageIndex) ? 64 : 0,
+    })),
+  };
+}
+
+function samplePdfTextBatchResult(startPage = 0, pageCount = 1) {
+  const pages = Array.from({ length: pageCount }, (_, offset) => {
+    const pageIndex = startPage + offset;
+    return {
+      pageIndex,
+      width: 612,
+      height: 792,
+      text: `Embedded PDF text page ${pageIndex + 1}`,
+      blocks: [{ text: `Embedded PDF text page ${pageIndex + 1}`, bbox: [0, 0, 200, 20], confidence: null }],
+      tables: [],
+      confidence: null,
+      extractionMethod: 'pdf_text',
+      timingsMs: { extractText: 2, total: 2 },
+    };
+  });
+  const timingsMs = { extractText: pages.length * 2, total: pages.length * 2 };
+  return {
+    engine: 'mock',
+    engineVersion: '1',
+    document: { type: 'pdf', filename: 'mixed-two-page.pdf', mimeType: 'application/pdf', sizeBytes: 3 },
+    pages,
+    plainText: pages.map((page) => page.text).join('\n\n'),
+    markdown: pages.map((page) => `## Page ${page.pageIndex + 1}\n\n${page.text}`).join('\n\n'),
+    extractionMethod: 'pdf_text',
+    timingsMs,
+    metadata: {
+      extractionMethod: 'pdf_text',
+      timingsMs,
+    },
+  };
 }
 
 function samplePdfBatchResult(startPage = 0, pageCount = 2) {

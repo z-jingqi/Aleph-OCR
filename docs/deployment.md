@@ -179,8 +179,7 @@ Create an image pipeline job:
 curl -sS -X POST "$BASE_URL/v1/tools/image/pipeline" \
   -H "Authorization: Bearer $API_KEY" \
   -H "Idempotency-Key: smoke-image-pipeline-001" \
-  -F "file=@apps/gateway/test/fixtures/images/receipt.png" \
-  -F 'pipeline={"convert":{"targetFormat":"webp","width":800,"fit":"inside"},"compress":{"outputFormat":"jpeg","maxWidth":800,"minQuality":45,"maxQuality":85},"ocr":{"ocrMode":"small"}}'
+  -F "file=@apps/gateway/test/fixtures/images/receipt.png"
 ```
 
 Check status and result:
@@ -225,5 +224,5 @@ This branch uses a clean `tool_jobs` schema and does not migrate legacy OCR tabl
 - Treat `data.status`, `data.terminal`, `data.resultAvailable`, `data.outputAvailable`, and `error.code` as the external integration contract.
 - Webhook delivery failure never rolls back a completed job. Use the delivery retry path and the polling fallback endpoints for recovery.
 - The production target is PDFs up to 100 pages and single-image pipeline jobs.
-- Production image traffic should use `/v1/tools/image/pipeline`; sync and standalone image endpoints are local/debug compatibility paths only.
+- Production image OCR traffic should use `/v1/tools/image/pipeline`; standalone async conversion and compression are production tools for non-OCR image workflows. Sync endpoints are local/debug paths only.
 - OCR container images should be promoted only after an amd64 image completes image and PDF OCR smoke tests with predownloaded PP-OCRv6 models.

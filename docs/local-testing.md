@@ -17,7 +17,7 @@ git --no-optional-locks diff --check
 Confirm no removed OCR v5 compatibility remains:
 
 ```bash
-rg -n "PP-OCRv5|\\bfast\\b|\\bbalanced\\b|\\baccurate\\b|ocrModes|defaultOcrMode|modeConfigs|X-Aleph-OCR|OcrJobWorkflow|ocr_engine|/v1/ocr/sync|ocr_jobs|ocr_job_events|ocr_webhook" apps packages README.md scripts docs/api.md docs/architecture.md docs/deployment.md docs/external-app-integration.md
+rg -n "PP-OCRv5|\\bbalanced\\b|\\baccurate\\b|ocrModes|defaultOcrMode|modeConfigs|X-Aleph-OCR|OcrJobWorkflow|ocr_engine|/v1/ocr/sync|ocr_jobs|ocr_job_events|ocr_webhook" apps packages README.md scripts docs/api.md docs/architecture.md docs/deployment.md docs/external-app-integration.md
 ```
 
 The `rg` command should return no matches.
@@ -115,7 +115,8 @@ curl -sS -X POST http://127.0.0.1:8787/v1/tools/ocr \
   -H "Authorization: Bearer dev-key" \
   -H "Idempotency-Key: local-ocr-pdf-001" \
   -F "file=@apps/gateway/test/fixtures/pdfs/receipt-single-page.pdf" \
-  -F "ocrMode=small"
+  -F "ocrMode=small" \
+  -F "pdfExtractionMode=auto"
 ```
 
 For each returned job id, verify:
@@ -137,7 +138,7 @@ curl -L http://127.0.0.1:8787/v1/jobs/<job-id>/output \
 Expected behavior:
 
 - `queued`, `processing`, and `cancel_requested` result reads return `409 JOB_NOT_READY`.
-- Ready OCR jobs expose `plainText`, `pages`, `ocrMode`, `requestedOcrMode`, `fallbackUsed`, `quality`, and `timingsMs`.
+- Ready OCR jobs expose `plainText`, `pages`, `ocrMode`, `requestedOcrMode`, `extractionMethod`, `fallbackUsed`, `quality`, and `timingsMs`.
 - Ready image output jobs expose metadata from `/result` and binary output from `/output`.
 - SSE opens as `text/event-stream` and starts with `job.snapshot`.
 - Cancelling a queued job returns `cancelled`.

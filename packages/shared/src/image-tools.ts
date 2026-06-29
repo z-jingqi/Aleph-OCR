@@ -40,14 +40,16 @@ export const ImageConvertResultSchema = z.object({
 });
 export type ImageConvertResult = z.infer<typeof ImageConvertResultSchema>;
 
-export const ImageCompressOptionsSchema = z.object({
+const ImageCompressOptionsBaseSchema = z.object({
   targetSizeBytes: z.number().int().positive().optional(),
   maxWidth: z.number().int().positive().optional(),
   maxHeight: z.number().int().positive().optional(),
   minQuality: z.number().int().min(1).max(100).default(45),
   maxQuality: z.number().int().min(1).max(100).default(85),
   outputFormat: ImageCompressFormatSchema.default('jpeg'),
-}).refine((value) => value.minQuality <= value.maxQuality, {
+});
+
+export const ImageCompressOptionsSchema = ImageCompressOptionsBaseSchema.refine((value) => value.minQuality <= value.maxQuality, {
   message: 'minQuality must be less than or equal to maxQuality',
   path: ['minQuality'],
 });
@@ -78,22 +80,93 @@ export const ImageCompressResultSchema = z.object({
 });
 export type ImageCompressResult = z.infer<typeof ImageCompressResultSchema>;
 
+export const ImagePipelineConvertOptionsSchema = z.object({
+  enabled: z.boolean().default(true),
+  targetFormat: ImageConvertFormatSchema.default('jpeg'),
+  quality: z.number().int().min(1).max(100).optional(),
+  width: z.number().int().positive().optional(),
+  height: z.number().int().positive().optional(),
+  fit: ImageConvertFitSchema.default('inside'),
+}).default({
+  enabled: true,
+  targetFormat: 'jpeg',
+  fit: 'inside',
+});
+
+export const ImagePipelineCompressOptionsSchema = ImageCompressOptionsBaseSchema.extend({
+  enabled: z.boolean().default(true),
+}).refine((value) => value.minQuality <= value.maxQuality, {
+  message: 'minQuality must be less than or equal to maxQuality',
+  path: ['minQuality'],
+}).default({
+  enabled: true,
+  outputFormat: 'jpeg',
+  targetSizeBytes: 350_000,
+  maxWidth: 1000,
+  maxHeight: 1000,
+  minQuality: 45,
+  maxQuality: 75,
+});
+
 export const ImagePipelineOptionsSchema = z.object({
-  convert: ImageConvertOptionsSchema,
-  compress: ImageCompressOptionsSchema,
+  convert: ImagePipelineConvertOptionsSchema,
+  compress: ImagePipelineCompressOptionsSchema,
   ocr: z.object({
     ocrMode: z.enum(['tiny', 'small', 'medium']).default('small'),
   }).default({ ocrMode: 'small' }),
-});
+}).default({});
 export type ImagePipelineOptions = z.infer<typeof ImagePipelineOptionsSchema>;
+
+export const ImagePipelineStepStatusSchema = z.enum(['ran', 'skipped']);
+export type ImagePipelineStepStatus = z.infer<typeof ImagePipelineStepStatusSchema>;
+
+export const ImagePipelineFileSchema = z.object({
+  filename: z.string(),
+  mimeType: z.string(),
+  sizeBytes: z.number().int().nonnegative(),
+  width: z.number().int().positive().optional(),
+  height: z.number().int().positive().optional(),
+  format: z.string().optional(),
+});
+export type ImagePipelineFile = z.infer<typeof ImagePipelineFileSchema>;
+
+export const ImagePipelineConvertStepSchema = z.object({
+  status: ImagePipelineStepStatusSchema,
+  reason: z.string().optional(),
+  output: ImageConvertOutputSchema.omit({ resultUrl: true }).optional(),
+});
+export type ImagePipelineConvertStep = z.infer<typeof ImagePipelineConvertStepSchema>;
+
+export const ImagePipelineCompressStepSchema = z.object({
+  status: ImagePipelineStepStatusSchema,
+  reason: z.string().optional(),
+  output: ImageCompressOutputSchema.optional(),
+});
+export type ImagePipelineCompressStep = z.infer<typeof ImagePipelineCompressStepSchema>;
+
+export const ImagePipelineOutputSchema = ImagePipelineFileSchema.extend({
+  resultUrl: z.string(),
+});
+export type ImagePipelineOutput = z.infer<typeof ImagePipelineOutputSchema>;
+
+export const ImagePipelineTimingsSchema = z.object({
+  convertMs: z.number().nonnegative().optional(),
+  compressMs: z.number().nonnegative().optional(),
+  ocrPreprocessMs: z.number().nonnegative().optional(),
+  ocrMs: z.number().nonnegative().optional(),
+  totalMs: z.number().nonnegative().optional(),
+}).catchall(z.number().nonnegative());
+export type ImagePipelineTimings = z.infer<typeof ImagePipelineTimingsSchema>;
 
 export const ImagePipelineResultSchema = z.object({
   jobId: z.string().optional(),
   status: JobStatusSchema.default('ready'),
   tool: z.literal('image.pipeline'),
-  converted: ImageConvertOutputSchema.omit({ resultUrl: true }),
-  compressed: ImageCompressOutputSchema,
+  converted: ImagePipelineConvertStepSchema,
+  compressed: ImagePipelineCompressStepSchema,
+  output: ImagePipelineOutputSchema,
   ocr: OcrResultSchema,
+  timingsMs: ImagePipelineTimingsSchema.optional(),
   metadata: z.record(z.unknown()).optional(),
 });
 export type ImagePipelineResult = z.infer<typeof ImagePipelineResultSchema>;

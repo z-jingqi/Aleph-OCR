@@ -21,7 +21,6 @@ export function fakeEnv(overrides: Partial<FakeGatewayEnv> = {}): FakeGatewayEnv
     ALEPH_TOOLS_ENGINE_URL: 'https://engine.test',
     WEBHOOK_SIGNING_SECRET: 'test-webhook-secret',
     ENABLE_SYNC_ENDPOINTS: 'true',
-    ENABLE_LEGACY_IMAGE_ENDPOINTS: 'true',
     TOOLS_ENGINE_INSTANCE_COUNT: '1',
     rows,
     events,

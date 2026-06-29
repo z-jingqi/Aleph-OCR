@@ -25,10 +25,6 @@ export function syncEndpointsEnabled(env: Env): boolean {
   return truthyFlag(env.ENABLE_SYNC_ENDPOINTS);
 }
 
-export function legacyImageEndpointsEnabled(env: Env): boolean {
-  return truthyFlag(env.ENABLE_LEGACY_IMAGE_ENDPOINTS);
-}
-
 export function toolsEngineInstanceCount(env: Env): number {
   const parsed = Number(env.TOOLS_ENGINE_INSTANCE_COUNT ?? '4');
   return Number.isInteger(parsed) && parsed > 0 ? parsed : 4;

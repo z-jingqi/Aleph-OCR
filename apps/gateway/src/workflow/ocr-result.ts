@@ -1,5 +1,8 @@
 import {
+  PdfExtractionModeSchema,
   OcrModeSchema,
+  type ExtractionMethod,
+  type PdfExtractionMode,
   type OcrMode,
   type OcrPage,
   type OcrQuality,
@@ -10,6 +13,11 @@ import type { StoredJob } from '../job-store';
 export function ocrModeForJob(job: StoredJob): OcrMode {
   const parsed = OcrModeSchema.safeParse(job.toolOptions?.ocrMode);
   return parsed.success ? parsed.data : 'small';
+}
+
+export function pdfExtractionModeForJob(job: StoredJob): PdfExtractionMode {
+  const parsed = PdfExtractionModeSchema.safeParse(job.toolOptions?.pdfExtractionMode);
+  return parsed.success ? parsed.data : 'auto';
 }
 
 export function withRequestedOcrModeMetadata(result: OcrResult, requestedOcrMode: OcrMode): OcrResult {
@@ -42,6 +50,7 @@ export function normalizePageResult(result: OcrResult, pageIndex: number): OcrPa
     ocrMode: page.ocrMode ?? result.ocrMode,
     requestedOcrMode: page.requestedOcrMode ?? result.requestedOcrMode,
     fallbackUsed: page.fallbackUsed ?? result.fallbackUsed,
+    extractionMethod: page.extractionMethod ?? (result.extractionMethod === 'pdf_text' ? 'pdf_text' : 'ocr'),
     ...(page.quality === undefined && result.quality !== undefined ? { quality: result.quality } : {}),
     ...(page.timingsMs === undefined && result.timingsMs !== undefined ? { timingsMs: result.timingsMs } : {}),
   };
@@ -49,7 +58,10 @@ export function normalizePageResult(result: OcrResult, pageIndex: number): OcrPa
 
 export function buildPdfResult(job: StoredJob, pages: OcrPage[]): OcrResult {
   const requestedOcrMode = ocrModeForJob(job);
-  const fallbackUsed = pages.some((page) => page.fallbackUsed || (page.ocrMode && page.ocrMode !== requestedOcrMode));
+  const pdfExtractionMode = pdfExtractionModeForJob(job);
+  const extractionMethod = aggregateExtractionMethod(pages);
+  const ocrPages = pages.filter((page) => (page.extractionMethod ?? 'ocr') === 'ocr');
+  const fallbackUsed = ocrPages.some((page) => page.fallbackUsed || (page.ocrMode && page.ocrMode !== requestedOcrMode));
   const ocrMode: OcrMode = fallbackUsed ? 'medium' : requestedOcrMode;
   const quality = buildOcrQuality(pages);
   const timingsMs = aggregateOcrTimings(pages);
@@ -66,6 +78,7 @@ export function buildPdfResult(job: StoredJob, pages: OcrPage[]): OcrResult {
     pages,
     plainText,
     markdown,
+    extractionMethod,
     ocrMode,
     requestedOcrMode,
     fallbackUsed,
@@ -74,11 +87,20 @@ export function buildPdfResult(job: StoredJob, pages: OcrPage[]): OcrResult {
     metadata: {
       ocrMode,
       requestedOcrMode,
+      pdfExtractionMode,
+      extractionMethod,
       fallbackUsed,
       quality,
       ...(timingsMs ? { timingsMs } : {}),
     },
   };
+}
+
+function aggregateExtractionMethod(pages: OcrPage[]): ExtractionMethod {
+  const methods = new Set(pages.map((page) => page.extractionMethod ?? 'ocr'));
+  if (methods.size === 1 && methods.has('pdf_text')) return 'pdf_text';
+  if (methods.size === 1 && methods.has('ocr')) return 'ocr';
+  return 'mixed';
 }
 
 function aggregateOcrTimings(pages: OcrPage[]) {

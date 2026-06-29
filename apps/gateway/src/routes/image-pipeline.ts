@@ -1,8 +1,8 @@
 import {
-  isSupportedImageMime,
   type OcrDocument,
 } from '@aleph-tools/shared';
 import { maxActiveJobsPerClient, maxImageUploadBytes } from '../config';
+import { normalizeImageUploadFile, validatePipelineImageInput } from '../http/file-types';
 import { buildIdempotencyFingerprint, normalizeIdempotencyKey } from '../http/idempotency';
 import { jsonError, jsonSuccess, parsedUploadError } from '../http/responses';
 import { readImagePipelineRequest } from '../http/uploads';
@@ -33,10 +33,13 @@ export function registerImagePipelineRoutes(app: GatewayApp) {
     const parsed = await readImagePipelineRequest(c.req.raw);
     if (!parsed.ok) return parsedUploadError(c, parsed);
 
-    const { file, options, callbackUrl, metadata } = parsed;
-    if (!isSupportedImageMime(file.type)) {
-      return jsonError(c, 'UNSUPPORTED_MEDIA_TYPE', `Unsupported image type: ${file.type || 'unknown'}`, 400, { retryable: false });
+    const { options, callbackUrl, metadata } = parsed;
+    const file = normalizeImageUploadFile(parsed.file);
+    const validationError = validatePipelineImageInput(file, options);
+    if (validationError === 'Pipeline only accepts image files') {
+      return jsonError(c, 'UNSUPPORTED_MEDIA_TYPE', validationError, 400, { retryable: false });
     }
+    if (validationError) return jsonError(c, 'UNSUPPORTED_FORMAT', validationError, 400, { retryable: false });
     if (file.size > maxImageUploadBytes(c.env)) {
       return jsonError(c, 'FILE_TOO_LARGE', 'Image exceeds pipeline upload size limit', 413, { retryable: false });
     }

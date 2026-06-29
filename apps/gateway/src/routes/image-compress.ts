@@ -1,9 +1,9 @@
 import {
   MAX_SYNC_IMAGE_SIZE_BYTES,
-  isSupportedImageMime,
   type OcrDocument,
 } from '@aleph-tools/shared';
-import { legacyImageEndpointsEnabled, maxActiveJobsPerClient, syncEndpointsEnabled, workflowConfigured } from '../config';
+import { maxActiveJobsPerClient, syncEndpointsEnabled, workflowConfigured } from '../config';
+import { imageUploadKind, normalizeImageUploadFile } from '../http/file-types';
 import { escapeHeaderFilename } from '../http/headers';
 import { buildIdempotencyFingerprint, normalizeIdempotencyKey } from '../http/idempotency';
 import { engineErrorResponse, jsonError, jsonSuccess, parsedUploadError } from '../http/responses';
@@ -27,9 +27,14 @@ export function registerImageCompressRoutes(app: GatewayApp) {
     const parsed = await readImageCompressRequest(c.req.raw);
     if (!parsed.ok) return parsedUploadError(c, parsed);
 
-    const { file, options } = parsed;
-    if (!isSupportedImageMime(file.type)) {
+    const { options } = parsed;
+    const file = normalizeImageUploadFile(parsed.file);
+    const kind = imageUploadKind(file);
+    if (kind === 'not_image') {
       return jsonError(c, 'UNSUPPORTED_MEDIA_TYPE', 'Image compression only supports image files', 400, { retryable: false });
+    }
+    if (kind === 'unknown_image') {
+      return jsonError(c, 'UNSUPPORTED_FORMAT', `Unsupported image format: ${file.type || 'unknown'}`, 400, { retryable: false });
     }
     if (file.size > MAX_SYNC_IMAGE_SIZE_BYTES) {
       return jsonError(c, 'FILE_TOO_LARGE', 'Image exceeds sync compression size limit', 413, { retryable: false });
@@ -53,9 +58,6 @@ export function registerImageCompressRoutes(app: GatewayApp) {
   });
 
   app.post('/v1/tools/image/compress', async (c) => {
-    if (!legacyImageEndpointsEnabled(c.env)) {
-      return jsonError(c, 'VALIDATION_ERROR', 'Standalone image compression jobs are disabled; use /v1/tools/image/pipeline', 400, { retryable: false });
-    }
     if (!workflowConfigured(c.env)) return jsonError(c, 'WORKFLOW_UNAVAILABLE', 'Tools workflow is not configured', 503, { retryable: true });
     try {
       requireStorage(c.env);
@@ -71,9 +73,14 @@ export function registerImageCompressRoutes(app: GatewayApp) {
     const parsed = await readImageCompressRequest(c.req.raw);
     if (!parsed.ok) return parsedUploadError(c, parsed);
 
-    const { file, options, callbackUrl, metadata } = parsed;
-    if (!isSupportedImageMime(file.type)) {
+    const { options, callbackUrl, metadata } = parsed;
+    const file = normalizeImageUploadFile(parsed.file);
+    const kind = imageUploadKind(file);
+    if (kind === 'not_image') {
       return jsonError(c, 'UNSUPPORTED_MEDIA_TYPE', `Unsupported image type: ${file.type || 'unknown'}`, 400, { retryable: false });
+    }
+    if (kind === 'unknown_image') {
+      return jsonError(c, 'UNSUPPORTED_FORMAT', `Unsupported image format: ${file.type || 'unknown'}`, 400, { retryable: false });
     }
 
     const document: OcrDocument = {

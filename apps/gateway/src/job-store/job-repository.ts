@@ -1,8 +1,12 @@
 import type {
+  ImageCompressOutput,
   ImageCompressResult,
   ImagePipelineResult,
   ImageConvertResult,
   ImageCompressFormat,
+  ImagePipelineCompressStep,
+  ImagePipelineConvertStep,
+  ImagePipelineTimings,
   JobStage,
   JobStatus,
   OcrDocument,
@@ -566,50 +570,46 @@ export async function setImageCompressResult(
 export async function setImagePipelineResult(
   env: JobStoreEnv & { DB: D1Database; ASSETS: R2Bucket },
   job: StoredJob,
-  converted: { filename: string; mimeType: string; sizeBytes: number; width: number; height: number; format: 'png' | 'jpeg' | 'webp' | 'avif' },
-  compressed: {
+  converted: ImagePipelineConvertStep,
+  compressed: ImagePipelineCompressStep,
+  output: {
     bytes: ArrayBuffer;
     filename: string;
     mimeType: string;
-    originalSizeBytes: number;
-    width: number;
-    height: number;
-    format: ImageCompressFormat;
-    quality: number;
-    targetSizeBytes?: number;
-    targetMet: boolean;
+    sizeBytes: number;
+    width?: number;
+    height?: number;
+    format?: string;
   },
   ocr: OcrResult,
+  timingsMs?: ImagePipelineTimings,
 ): Promise<StoredJob> {
-  const outputR2Key = `${OUTPUT_PREFIX}/${job.clientId}/${job.jobId}/${safeR2Name(compressed.filename)}`;
-  await env.ASSETS.put(outputR2Key, compressed.bytes, {
-    httpMetadata: { contentType: compressed.mimeType },
+  const outputR2Key = `${OUTPUT_PREFIX}/${job.clientId}/${job.jobId}/${safeR2Name(output.filename)}`;
+  await env.ASSETS.put(outputR2Key, output.bytes, {
+    httpMetadata: { contentType: output.mimeType },
     customMetadata: { jobId: job.jobId, clientId: job.clientId, tool: 'image.pipeline' },
   });
 
-  const sizeBytes = compressed.bytes.byteLength;
-  const compressedOutput = {
-    filename: compressed.filename,
-    mimeType: compressed.mimeType,
-    originalSizeBytes: compressed.originalSizeBytes,
-    sizeBytes,
-    compressionRatio: compressed.originalSizeBytes > 0 ? sizeBytes / compressed.originalSizeBytes : 0,
-    ...(compressed.targetSizeBytes ? { targetSizeBytes: compressed.targetSizeBytes } : {}),
-    targetMet: compressed.targetMet,
-    width: compressed.width,
-    height: compressed.height,
-    format: compressed.format,
-    quality: compressed.quality,
+  const outputMetadata = {
+    filename: output.filename,
+    mimeType: output.mimeType,
+    sizeBytes: output.bytes.byteLength,
+    ...(output.width ? { width: output.width } : {}),
+    ...(output.height ? { height: output.height } : {}),
+    ...(output.format ? { format: output.format } : {}),
     resultUrl: `/v1/jobs/${job.jobId}/output`,
   };
+  const compressedStep = addPipelineOutputUrl(compressed, `/v1/jobs/${job.jobId}/output`);
   const resultR2Key = `${RESULT_PREFIX}/${job.clientId}/${job.jobId}.json`;
   const result: ImagePipelineResult = {
     jobId: job.jobId,
     status: 'ready',
     tool: 'image.pipeline',
     converted,
-    compressed: compressedOutput,
+    compressed: compressedStep,
+    output: outputMetadata,
     ocr: { ...ocr, jobId: job.jobId, status: 'ready' },
+    ...(timingsMs ? { timingsMs } : {}),
     metadata: job.callbackMetadata ?? {},
   };
   await env.ASSETS.put(resultR2Key, JSON.stringify(result), {
@@ -625,7 +625,7 @@ export async function setImagePipelineResult(
          processing_lease_until = NULL, completed_at = ?, updated_at = ?
      WHERE job_id = ? AND status NOT IN ('cancel_requested', 'cancelled', 'deleted')`,
   )
-    .bind('ready', 100, 'ready', 1, 1, resultR2Key, outputR2Key, JSON.stringify(compressedOutput), completedAt, completedAt, job.jobId)
+    .bind('ready', 100, 'ready', 1, 1, resultR2Key, outputR2Key, JSON.stringify(outputMetadata), completedAt, completedAt, job.jobId)
     .run();
   if (!hasChangedRows(update)) {
     await Promise.all([env.ASSETS.delete(outputR2Key), env.ASSETS.delete(resultR2Key)]);
@@ -644,6 +644,17 @@ export async function setImagePipelineResult(
     outputUrl: `/v1/jobs/${job.jobId}/output`,
   });
   return updated;
+}
+
+function addPipelineOutputUrl(step: ImagePipelineCompressStep, resultUrl: string): ImagePipelineCompressStep {
+  if (step.status !== 'ran' || !step.output) return step;
+  return {
+    ...step,
+    output: {
+      ...step.output,
+      resultUrl,
+    } as ImageCompressOutput,
+  };
 }
 
 export async function failJob(

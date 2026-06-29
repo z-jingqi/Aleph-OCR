@@ -107,17 +107,20 @@ Recommended UI behavior:
 
 ## Creating Jobs
 
-Image pipeline job, recommended for production image conversion, compression, and OCR:
+Image pipeline job, recommended for production image OCR. The `pipeline` field is optional; omit it to use necessary conversion, OCR-friendly compression, and `small` OCR:
 
 ```bash
 curl -X POST "$BASE_URL/v1/tools/image/pipeline" \
   -H "Authorization: Bearer $API_KEY" \
   -H "Idempotency-Key: pipeline-asset-123" \
   -F "file=@photo.heic" \
-  -F 'pipeline={"convert":{"targetFormat":"webp","width":1600,"fit":"inside"},"compress":{"outputFormat":"jpeg","maxWidth":1600,"minQuality":45,"maxQuality":85},"ocr":{"ocrMode":"small"}}' \
   -F 'metadata={"assetId":"asset_123"}' \
   -F "callbackUrl=https://app.example/webhooks/aleph-tools"
 ```
+
+For JPEG, PNG, TIFF, or BMP images, conversion is skipped even when `convert.enabled` is true. If `convert.enabled=false`, WebP, HEIC, and HEIF cannot be sent to OCR and return `UNSUPPORTED_FORMAT`.
+
+Default pipeline compression is tuned for OCR latency: normal images use long side `1000`, quality up to `75`, and target size around `350KB`; HEIC/HEIF and large phone-photo uploads default to long side `1200`, quality up to `72`, and target size around `350KB`. Override `pipeline.compress` only when the application needs more detail and accepts slower OCR. Pipeline results include `timingsMs.convertMs`, `timingsMs.compressMs`, `timingsMs.ocrPreprocessMs`, `timingsMs.ocrMs`, and `timingsMs.totalMs`.
 
 PDF OCR async job:
 
@@ -127,11 +130,14 @@ curl -X POST "$BASE_URL/v1/tools/ocr" \
   -H "Idempotency-Key: upload-123" \
   -F "file=@document.pdf" \
   -F "ocrMode=small" \
+  -F "pdfExtractionMode=auto" \
   -F 'metadata={"documentId":"doc_123"}' \
   -F "callbackUrl=https://app.example/webhooks/aleph-tools"
 ```
 
-Legacy standalone image conversion, only when `ENABLE_LEGACY_IMAGE_ENDPOINTS=true`:
+For PDFs, `pdfExtractionMode=auto` is the default. It extracts embedded text directly when a page has a usable text layer and runs PP-OCRv6 only for scanned pages. Use `pdfExtractionMode=ocr` to force OCR for every page, or `pdfExtractionMode=text` when a missing text layer should fail the job.
+
+Standalone image conversion, for callers that need conversion without OCR:
 
 ```bash
 curl -X POST "$BASE_URL/v1/tools/image/convert" \
@@ -143,7 +149,7 @@ curl -X POST "$BASE_URL/v1/tools/image/convert" \
   -F "width=1600"
 ```
 
-Legacy standalone image compression, only when `ENABLE_LEGACY_IMAGE_ENDPOINTS=true`:
+Standalone image compression, for callers that need compression without OCR:
 
 ```bash
 curl -X POST "$BASE_URL/v1/tools/image/compress" \
@@ -155,9 +161,9 @@ curl -X POST "$BASE_URL/v1/tools/image/compress" \
   -F "outputFormat=jpeg"
 ```
 
-Use `Idempotency-Key` for all create retries. Reusing the same key with a different file, MIME type, size, tool, operation, OCR mode, conversion options, or compression options returns `IDEMPOTENCY_CONFLICT`.
+Use `Idempotency-Key` for all create retries. Reusing the same key with a different file, MIME type, size, tool, operation, OCR mode, PDF extraction mode, conversion options, or compression options returns `IDEMPOTENCY_CONFLICT`.
 
-For images, use the pipeline endpoint instead of creating separate conversion, compression, and OCR jobs. The pipeline returns one job id, one final result, and one compressed binary output.
+For image OCR, use the pipeline endpoint instead of creating separate conversion, compression, and OCR jobs. The pipeline returns one job id, one final result, and one final binary output. Use standalone conversion or compression only when the caller does not need OCR.
 
 ## Reading Results
 
@@ -167,6 +173,8 @@ Use `GET /v1/jobs/:jobId` as the source of truth. Only call:
 - `GET /v1/jobs/:jobId/output` when `outputAvailable` is true.
 
 If a caller reads too early, the API returns `JOB_NOT_READY` with `retryable: true`.
+
+PDF OCR results include `extractionMethod` at the top level and on each page. Top-level values are `pdf_text`, `ocr`, or `mixed`; per-page values are `pdf_text` or `ocr`. This reports how text was extracted, not whether tables or fields were semantically understood.
 
 ## SSE Progress
 

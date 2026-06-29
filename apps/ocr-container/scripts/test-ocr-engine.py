@@ -31,7 +31,7 @@ if "fitz" not in sys.modules:
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.ocr import clear_ocr_cache, engine_info, get_ocr, ocr_image_bytes, ocr_pdf_batch_bytes  # noqa: E402
+from src.ocr import clear_ocr_cache, engine_info, get_ocr, ocr_image_bytes, ocr_pdf_batch_bytes, pdf_info_bytes, pdf_text_batch_bytes  # noqa: E402
 from src.ocr import modes as ocr_modes  # noqa: E402
 from src.ocr import pdf as ocr_pdf  # noqa: E402
 from src.ocr.preprocess import preprocess_image_for_ocr  # noqa: E402
@@ -50,15 +50,33 @@ def make_png(width: int = 1200, height: int = 800, mode: str = "RGBA") -> bytes:
     return output.getvalue()
 
 
+class FakeRect:
+    width = 612
+    height = 792
+
+
 class FakePdfPage:
-    def __init__(self, page_index: int, rendered_dpis: list[int]) -> None:
+    def __init__(self, page_index: int, rendered_dpis: list[int], text_by_page: list[str] | None = None) -> None:
         self.page_index = page_index
         self.rendered_dpis = rendered_dpis
+        self.text_by_page = text_by_page or []
+        self.rect = FakeRect()
 
     def get_pixmap(self, dpi: int, alpha: bool) -> "FakePixmap":
         assert alpha is False
         self.rendered_dpis.append(dpi)
         return FakePixmap()
+
+    def get_text(self, mode: str) -> Any:
+        text = self.text_by_page[self.page_index] if self.page_index < len(self.text_by_page) else ""
+        if mode == "text":
+            return text
+        if mode == "dict":
+            lines = []
+            for index, line in enumerate(text.splitlines()):
+                lines.append({"spans": [{"text": line, "bbox": [0, index * 20, 200, index * 20 + 12]}]})
+            return {"blocks": [{"lines": lines}]}
+        return text
 
 
 class FakePixmap:
@@ -67,12 +85,13 @@ class FakePixmap:
 
 
 class FakePdfDoc:
-    def __init__(self, page_count: int, rendered_dpis: list[int]) -> None:
+    def __init__(self, page_count: int, rendered_dpis: list[int], text_by_page: list[str] | None = None) -> None:
         self.page_count = page_count
         self.rendered_dpis = rendered_dpis
+        self.text_by_page = text_by_page
 
     def load_page(self, page_index: int) -> FakePdfPage:
-        return FakePdfPage(page_index, self.rendered_dpis)
+        return FakePdfPage(page_index, self.rendered_dpis, self.text_by_page)
 
     def close(self) -> None:
         pass
@@ -134,6 +153,33 @@ def test_preprocess_scales_and_normalizes_rgb() -> None:
         assert preprocessed.height == 1200
         assert preprocessed.preprocessed_width == 1600
         assert preprocessed.preprocessed_height == 800
+
+
+def test_preprocess_document_crop_and_max_side_override() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source = Path(tmpdir) / "phone-photo.png"
+        image = Image.new("RGB", (1200, 1200), (40, 40, 40))
+        paper = Image.new("RGB", (700, 900), (252, 252, 252))
+        image.paste(paper, (250, 150))
+        image.save(source, format="PNG")
+
+        preprocessed = preprocess_image_for_ocr(
+            source,
+            Path(tmpdir),
+            ocr_modes.MODE_CONFIGS["small"],
+            max_side=600,
+            document_crop=True,
+        )
+
+        with Image.open(preprocessed.path) as output:
+            assert output.mode == "RGB"
+            assert max(output.size) <= 600
+
+        assert preprocessed.crop_applied is True
+        assert preprocessed.crop_bbox is not None
+        assert preprocessed.max_side == 600
+        assert preprocessed.preprocessed_width < preprocessed.width
+        assert preprocessed.preprocessed_height < preprocessed.height
 
 
 def test_quality_heuristics() -> None:
@@ -199,6 +245,42 @@ def test_pdf_batch_uses_mode_dpi_and_page_range() -> None:
     assert result["pages"][0]["preprocessedWidth"] <= ocr_modes.MODE_CONFIGS["small"].preprocess_max_side
 
 
+def test_pdf_info_reports_text_layer_pages() -> None:
+    rendered_dpis: list[int] = []
+    ocr_pdf.fitz.open = lambda *_args, **_kwargs: FakePdfDoc(
+        page_count=2,
+        rendered_dpis=rendered_dpis,
+        text_by_page=["short", "This PDF page has enough embedded text for fast extraction."],
+    )
+
+    result = pdf_info_bytes(b"%PDF", "sample.pdf")
+
+    assert result["pageCount"] == 2
+    assert result["pages"][0] == {"pageIndex": 0, "hasTextLayer": False, "textLength": 5}
+    assert result["pages"][1]["hasTextLayer"] is True
+    assert rendered_dpis == []
+
+
+def test_pdf_text_batch_extracts_pages_without_ocr() -> None:
+    rendered_dpis: list[int] = []
+    ocr_pdf.fitz.open = lambda *_args, **_kwargs: FakePdfDoc(
+        page_count=3,
+        rendered_dpis=rendered_dpis,
+        text_by_page=["one", "Patient Name\n白细胞 6.1 10^9/L", "three"],
+    )
+
+    result = pdf_text_batch_bytes(b"%PDF", "sample.pdf", "application/pdf", start_page=1, page_count=1)
+
+    assert result["extractionMethod"] == "pdf_text"
+    assert result["metadata"]["extractionMethod"] == "pdf_text"
+    assert result["pages"][0]["pageIndex"] == 1
+    assert result["pages"][0]["extractionMethod"] == "pdf_text"
+    assert result["pages"][0]["text"] == "Patient Name\n白细胞 6.1 10^9/L"
+    assert result["pages"][0]["blocks"][0]["confidence"] is None
+    assert result["timingsMs"]["extractText"] >= 0
+    assert rendered_dpis == []
+
+
 def test_pdf_page_fallback_rerenders_with_medium_dpi() -> None:
     rendered_dpis: list[int] = []
     calls: list[str] = []
@@ -243,9 +325,12 @@ def main() -> None:
     test_model_source_check_env_is_configured()
     test_mode_config_and_cache()
     test_preprocess_scales_and_normalizes_rgb()
+    test_preprocess_document_crop_and_max_side_override()
     test_quality_heuristics()
     test_image_ocr_falls_back_to_medium_once()
     test_pdf_batch_uses_mode_dpi_and_page_range()
+    test_pdf_info_reports_text_layer_pages()
+    test_pdf_text_batch_extracts_pages_without_ocr()
     test_pdf_page_fallback_rerenders_with_medium_dpi()
     test_engine_info_exposes_modes()
 

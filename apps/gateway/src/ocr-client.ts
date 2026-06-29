@@ -46,8 +46,24 @@ export type ImageCompressResponse = {
   targetMet: boolean;
 };
 
+export type OcrImageOptions = {
+  maxSide?: number;
+  documentCrop?: boolean;
+};
+
 export type PdfSourceObject = {
   body: ReadableStream;
+};
+
+export type PdfTextLayerPageInfo = {
+  pageIndex: number;
+  hasTextLayer: boolean;
+  textLength: number;
+};
+
+export type PdfInfo = {
+  pageCount: number;
+  pages: PdfTextLayerPageInfo[];
 };
 
 export class OcrEngineError extends Error {
@@ -63,26 +79,32 @@ export async function getEngineInfo(env: ToolsClientEnv): Promise<EngineInfo> {
   return EngineInfoSchema.parse(data);
 }
 
-export async function ocrImage(env: ToolsClientEnv, file: File, mode: OcrMode = 'small'): Promise<OcrResult> {
+export async function ocrImage(env: ToolsClientEnv, file: File, mode: OcrMode = 'small', options: OcrImageOptions = {}): Promise<OcrResult> {
   const form = new FormData();
   form.append('file', file, file.name);
-  const response = await engineFetch(env, ocrPath('/internal/ocr/image', mode), { method: 'POST', body: form });
+  const response = await engineFetch(env, ocrPath('/internal/ocr/image', mode, {
+    ...(options.maxSide !== undefined ? { max_side: options.maxSide } : {}),
+    ...(options.documentCrop !== undefined ? { document_crop: options.documentCrop ? 'true' : 'false' } : {}),
+  }), { method: 'POST', body: form });
   const data = await response.json();
   return OcrResultSchema.parse(data);
 }
 
-export async function getPdfInfoFromObject(env: ToolsClientEnv, object: PdfSourceObject, filename: string): Promise<{ pageCount: number }> {
+export async function getPdfInfoFromObject(env: ToolsClientEnv, object: PdfSourceObject, filename: string): Promise<PdfInfo> {
   const response = await engineFetch(env, pdfRawPath('/internal/ocr/pdf-info', { filename }), {
     method: 'POST',
     body: object.body,
     duplex: 'half',
     headers: { 'Content-Type': 'application/pdf' },
   } as RequestInit & { duplex: 'half' });
-  const data = (await response.json()) as { pageCount?: unknown };
+  const data = (await response.json()) as { pageCount?: unknown; pages?: unknown };
   if (!Number.isInteger(data.pageCount) || Number(data.pageCount) < 0) {
     throw new OcrEngineError('OCR engine returned invalid PDF metadata', 500);
   }
-  return { pageCount: Number(data.pageCount) };
+  const pages = Array.isArray(data.pages)
+    ? data.pages.map((page) => parsePdfTextLayerPageInfo(page)).filter((page): page is PdfTextLayerPageInfo => page !== null)
+    : [];
+  return { pageCount: Number(data.pageCount), pages };
 }
 
 export async function ocrPdfBatchFromObject(
@@ -94,6 +116,23 @@ export async function ocrPdfBatchFromObject(
   mode: OcrMode = 'small',
 ): Promise<OcrResult> {
   const response = await engineFetch(env, ocrPath('/internal/ocr/pdf-batch', mode, { filename, start_page: startPage, page_count: pageCount }), {
+    method: 'POST',
+    body: object.body,
+    duplex: 'half',
+    headers: { 'Content-Type': 'application/pdf' },
+  } as RequestInit & { duplex: 'half' });
+  const data = await response.json();
+  return OcrResultSchema.parse(data);
+}
+
+export async function extractPdfTextBatchFromObject(
+  env: ToolsClientEnv,
+  object: PdfSourceObject,
+  filename: string,
+  startPage: number,
+  pageCount: number,
+): Promise<OcrResult> {
+  const response = await engineFetch(env, pdfRawPath('/internal/ocr/pdf-text-batch', { filename, start_page: startPage, page_count: pageCount }), {
     method: 'POST',
     body: object.body,
     duplex: 'half',
@@ -205,6 +244,17 @@ async function engineFetch(env: ToolsClientEnv, path: string, init: RequestInit)
 function toolsEngineInstanceCount(env: ToolsClientEnv): number {
   const parsed = Number(env.TOOLS_ENGINE_INSTANCE_COUNT ?? '4');
   return Number.isInteger(parsed) && parsed > 0 ? parsed : 4;
+}
+
+function parsePdfTextLayerPageInfo(value: unknown): PdfTextLayerPageInfo | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (!Number.isInteger(record.pageIndex) || typeof record.hasTextLayer !== 'boolean' || !Number.isInteger(record.textLength)) return null;
+  return {
+    pageIndex: Number(record.pageIndex),
+    hasTextLayer: record.hasTextLayer,
+    textLength: Number(record.textLength),
+  };
 }
 
 function convertedFilename(filename: string, format: ImageConvertFormat): string {

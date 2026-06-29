@@ -15,7 +15,14 @@ from .timings import add_timings, elapsed_ms
 from .utils import safe_filename
 
 
-def ocr_image_bytes(content: bytes, filename: str, mime_type: str, mode: str = DEFAULT_OCR_MODE) -> dict[str, Any]:
+def ocr_image_bytes(
+    content: bytes,
+    filename: str,
+    mime_type: str,
+    mode: str = DEFAULT_OCR_MODE,
+    max_side: int | None = None,
+    document_crop: bool = False,
+) -> dict[str, Any]:
     normalized_mode = normalize_ocr_mode(mode)
     with tempfile.TemporaryDirectory() as tmpdir:
         image_path = Path(tmpdir) / safe_filename(filename, "image")
@@ -28,6 +35,8 @@ def ocr_image_bytes(content: bytes, filename: str, mime_type: str, mode: str = D
             document_type="image",
             requested_mode=normalized_mode,
             tmpdir=Path(tmpdir),
+            max_side=max_side,
+            document_crop=document_crop,
         )
 
 
@@ -39,12 +48,14 @@ def ocr_image_path_with_fallback(
     document_type: str,
     requested_mode: OcrMode,
     tmpdir: Path,
+    max_side: int | None = None,
+    document_crop: bool = False,
 ) -> dict[str, Any]:
     started = time.perf_counter()
-    first = ocr_image_path_once(image_path, filename, mime_type, page_index, document_type, requested_mode, tmpdir)
+    first = ocr_image_path_once(image_path, filename, mime_type, page_index, document_type, requested_mode, tmpdir, max_side=max_side, document_crop=document_crop)
     first_quality = evaluate_quality(first["pages"])
     if requested_mode != FALLBACK_OCR_MODE and first_quality["lowQuality"]:
-        second = ocr_image_path_once(image_path, filename, mime_type, page_index, document_type, FALLBACK_OCR_MODE, tmpdir)
+        second = ocr_image_path_once(image_path, filename, mime_type, page_index, document_type, FALLBACK_OCR_MODE, tmpdir, max_side=max_side, document_crop=document_crop)
         second_quality = evaluate_quality(second["pages"])
         timings = add_timings(first["timingsMs"], second["timingsMs"])
         timings["requestedTotal"] = first["timingsMs"]["total"]
@@ -76,9 +87,11 @@ def ocr_image_path_once(
     document_type: str,
     mode: OcrMode,
     tmpdir: Path,
+    max_side: int | None = None,
+    document_crop: bool = False,
 ) -> dict[str, Any]:
     started = time.perf_counter()
-    preprocessed = preprocess_image_path(image_path, tmpdir, mode, page_index)
+    preprocessed = preprocess_image_path(image_path, tmpdir, mode, page_index, max_side=max_side, document_crop=document_crop)
     before_init, cached_model_init_ms = model_init_ms_for_request(mode)
     ocr = get_ocr(mode)
     model_init_ms = 0.0 if before_init else model_init_ms_for_request(mode)[1] or cached_model_init_ms
@@ -102,6 +115,9 @@ def ocr_image_path_once(
         "ocrMode": mode,
         "preprocessedWidth": preprocessed.preprocessed_width,
         "preprocessedHeight": preprocessed.preprocessed_height,
+        "ocrInputMaxSide": preprocessed.max_side,
+        "documentCropApplied": preprocessed.crop_applied,
+        **({"documentCropBbox": list(preprocessed.crop_bbox)} if preprocessed.crop_bbox else {}),
     }
     result = build_result(filename, mime_type, document_type, [page])
     result["timingsMs"] = {
