@@ -19,7 +19,7 @@ export function fakeEnv(overrides: Partial<FakeGatewayEnv> = {}): FakeGatewayEnv
     } as unknown as Queue<{ jobId: string }>,
     ALEPH_TOOLS_API_KEYS: '{"example-client-dev":"dev-key","other-client":"other-key"}',
     ALEPH_TOOLS_ENGINE_URL: 'https://engine.test',
-    WEBHOOK_SIGNING_SECRET: 'test-webhook-secret',
+    ALEPH_TOOLS_WEBHOOK_SECRETS: '{"example-client-dev":"test-webhook-secret","other-client":"other-webhook-secret"}',
     ENABLE_SYNC_ENDPOINTS: 'true',
     TOOLS_ENGINE_INSTANCE_COUNT: '1',
     rows,

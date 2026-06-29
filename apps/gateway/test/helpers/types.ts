@@ -76,7 +76,7 @@ export type FakeGatewayEnv = {
   TOOLS_WORKFLOW?: Workflow<{ jobId: string }>;
   ALEPH_TOOLS_API_KEYS: string;
   ALEPH_TOOLS_ENGINE_URL: string;
-  WEBHOOK_SIGNING_SECRET: string;
+  ALEPH_TOOLS_WEBHOOK_SECRETS: string;
   MAX_JOB_ATTEMPTS?: string;
   MAX_ACTIVE_JOBS_PER_CLIENT?: string;
   MAX_IMAGE_UPLOAD_BYTES?: string;

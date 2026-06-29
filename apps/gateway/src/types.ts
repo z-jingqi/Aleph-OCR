@@ -10,7 +10,7 @@ export interface Env extends AuthEnv, ToolsClientEnv {
   TOOLS_ENGINE?: DurableObjectNamespace<ToolsEngineContainer>;
   TOOLS_WORKFLOW?: Workflow<ToolWorkflowParams>;
   JOB_RETENTION_DAYS?: string;
-  WEBHOOK_SIGNING_SECRET?: string;
+  ALEPH_TOOLS_WEBHOOK_SECRETS?: string;
   MAX_JOB_ATTEMPTS?: string;
   MAX_ACTIVE_JOBS_PER_CLIENT?: string;
   MAX_IMAGE_UPLOAD_BYTES?: string;

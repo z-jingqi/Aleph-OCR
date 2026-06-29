@@ -6,7 +6,7 @@ All `/v1/*` routes require:
 Authorization: Bearer <api-key>
 ```
 
-API keys are configured as the `ALEPH_TOOLS_API_KEYS` Worker secret. A JSON object maps client IDs to keys, for example `{"example-client-dev":"..."}`. Jobs and results are isolated by client ID.
+API keys are configured as the `ALEPH_TOOLS_API_KEYS` Worker secret. A JSON object maps client IDs to keys, for example `{"example-client-preview":"..."}`. Jobs and results are isolated by client ID.
 
 For production client behavior, stable error codes, retry guidance, SSE reconnects, and webhook verification, see [External App Integration](./external-app-integration.md).
 
@@ -190,6 +190,6 @@ Headers:
 - `X-Aleph-Tools-Event-Id`: stable event ID.
 - `X-Aleph-Tools-Delivery-Id`: delivery attempt ID.
 - `X-Aleph-Tools-Timestamp`: signing timestamp.
-- `X-Aleph-Tools-Signature`: `sha256=<hex hmac>` over `<timestamp>.<raw body>`.
+- `X-Aleph-Tools-Signature`: `sha256=<hex hmac>` over `<timestamp>.<raw body>` using the receiving client's secret from `ALEPH_TOOLS_WEBHOOK_SECRETS`.
 
 Ready payloads include `event`, `eventId`, `jobId`, `job`, `resultUrl`, `metadata`, and `createdAt`. Image output and pipeline jobs also include `outputUrl`. Failed payloads include `event`, `eventId`, `jobId`, `job`, `error`, `metadata`, and `createdAt`. Cancelled payloads include `event`, `eventId`, `jobId`, `job`, `metadata`, and `createdAt`.

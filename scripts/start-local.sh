@@ -81,6 +81,7 @@ fi
 TOOLS_ENGINE_TOKEN="${TOOLS_ENGINE_TOKEN:-dev-internal-token}"
 
 ensure_dev_var "ALEPH_TOOLS_API_KEYS" '{"example-client-dev":"dev-key"}'
+ensure_dev_var "ALEPH_TOOLS_WEBHOOK_SECRETS" '{"example-client-dev":"dev-webhook-secret"}'
 set_dev_var "ALEPH_TOOLS_ENGINE_URL" "http://127.0.0.1:${ENGINE_PORT}"
 set_dev_var "TOOLS_ENGINE_TOKEN" "$TOOLS_ENGINE_TOKEN"
 ensure_dev_var "JOB_RETENTION_DAYS" "7"

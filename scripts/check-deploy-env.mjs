@@ -1,8 +1,8 @@
 const [environment, ...rawFlags] = process.argv.slice(2);
 const flags = rawFlags.filter((flag) => flag !== '--');
 
-if (!environment || !['dev', 'prod'].includes(environment)) {
-  console.error('Usage: node scripts/check-deploy-env.mjs <dev|prod> [--ci]');
+if (!environment || !['preview', 'prod'].includes(environment)) {
+  console.error('Usage: node scripts/check-deploy-env.mjs <preview|prod> [--ci]');
   process.exit(1);
 }
 
@@ -32,7 +32,7 @@ const checks = [
     label: 'Custom domain',
     required: false,
     names: [`ALEPH_TOOLS_DOMAIN_${suffix}`],
-    note: environment === 'prod' ? 'Defaults to tools.aleph-cat.com.' : 'Defaults to dev-tools.aleph-cat.com.',
+    note: environment === 'prod' ? 'Defaults to tools.aleph-cat.com.' : 'Defaults to preview-tools.aleph-cat.com.',
   },
   {
     label: 'Container image',
@@ -47,10 +47,10 @@ const checks = [
     note: 'Set as a Worker secret with wrangler secret put or GitHub Actions secrets.',
   },
   {
-    label: 'Webhook signing secret',
+    label: 'Webhook signing secrets',
     required: strictCi,
-    names: ['WEBHOOK_SIGNING_SECRET'],
-    note: 'Required for production webhook verification.',
+    names: ['ALEPH_TOOLS_WEBHOOK_SECRETS'],
+    note: 'Required for production webhook verification. JSON object keyed by client id.',
   },
   {
     label: 'Cloudflare API token',

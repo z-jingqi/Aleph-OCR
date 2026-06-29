@@ -202,8 +202,10 @@ Headers:
 The signature is:
 
 ```text
-sha256=<hmac_sha256(WEBHOOK_SIGNING_SECRET, `${timestamp}.${rawBody}`)>
+sha256=<hmac_sha256(clientWebhookSecret, `${timestamp}.${rawBody}`)>
 ```
+
+`clientWebhookSecret` is the value configured for the job owner's `clientId` in `ALEPH_TOOLS_WEBHOOK_SECRETS`.
 
 Ready payloads include `resultUrl`; image conversion, compression, and pipeline ready payloads also include `outputUrl`. Failed and cancelled payloads include a structured `error` object.
 

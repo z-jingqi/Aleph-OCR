@@ -5,14 +5,14 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const [environment] = process.argv.slice(2);
 
-if (!environment || !['dev', 'prod'].includes(environment)) {
-  throw new Error('Usage: node scripts/prepare-wrangler-config.mjs <dev|prod>');
+if (!environment || !['preview', 'prod'].includes(environment)) {
+  throw new Error('Usage: node scripts/prepare-wrangler-config.mjs <preview|prod>');
 }
 
 const suffix = environment.toUpperCase();
 const appDir = resolve(repoRoot, 'apps', 'gateway');
 const containerImage = process.env.ALEPH_TOOLS_CONTAINER_IMAGE ?? '';
-const defaultToolsDomain = environment === 'prod' ? 'tools.aleph-cat.com' : 'dev-tools.aleph-cat.com';
+const defaultToolsDomain = environment === 'prod' ? 'tools.aleph-cat.com' : 'preview-tools.aleph-cat.com';
 const values = {
   __ENV__: environment,
   __TOOLS_DOMAIN__: process.env[`ALEPH_TOOLS_DOMAIN_${suffix}`] ?? defaultToolsDomain,

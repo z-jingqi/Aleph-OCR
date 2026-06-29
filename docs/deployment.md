@@ -2,7 +2,7 @@
 
 This guide is for deploying the Gateway Worker and wiring it to D1, R2, Queues, Workflows, and the Python tools engine.
 
-Use separate Cloudflare resources for `dev` and `prod`. The generated Wrangler config names the Workers `aleph-tools-gateway-dev` and `aleph-tools-gateway-prod`.
+Use separate Cloudflare resources for `preview` and `prod`. The generated Wrangler config names the Workers `aleph-tools-gateway-preview` and `aleph-tools-gateway-prod`.
 
 ## What Can Be Prepared Before Secrets
 
@@ -12,15 +12,15 @@ These commands do not write secrets or deploy production traffic:
 pnpm install
 pnpm build
 pnpm test
-pnpm deploy:check:dev
+pnpm deploy:check:preview
 pnpm deploy:check:prod
-pnpm deploy:check:ci:dev
+pnpm deploy:check:ci:preview
 pnpm deploy:check:ci:prod
 ```
 
 `deploy:check:*` verifies only local environment variables. It does not call Cloudflare.
 
-Before deploying to dev, run the local checks in [Local Testing](./local-testing.md), including the `linux/amd64` tools container E2E path.
+Before deploying to preview, run the local checks in [Local Testing](./local-testing.md), including the `linux/amd64` tools container E2E path.
 
 ## Resource Layout
 
@@ -28,15 +28,15 @@ Recommended names:
 
 | Environment | D1 | R2 | Queue | Worker | Domain |
 | --- | --- | --- | --- | --- | --- |
-| dev | `aleph-tools-dev` | `aleph-tools-assets-dev` | `aleph-tools-jobs-dev` | `aleph-tools-gateway-dev` | `dev-tools.aleph-cat.com` |
+| preview | `aleph-tools-preview` | `aleph-tools-assets-preview` | `aleph-tools-jobs-preview` | `aleph-tools-gateway-preview` | `preview-tools.aleph-cat.com` |
 | prod | `aleph-tools-prod` | `aleph-tools-assets-prod` | `aleph-tools-jobs-prod` | `aleph-tools-gateway-prod` | `tools.aleph-cat.com` |
 
 Create resources:
 
 ```bash
-pnpm --dir apps/gateway exec wrangler d1 create aleph-tools-dev
-pnpm --dir apps/gateway exec wrangler r2 bucket create aleph-tools-assets-dev
-pnpm --dir apps/gateway exec wrangler queues create aleph-tools-jobs-dev
+pnpm --dir apps/gateway exec wrangler d1 create aleph-tools-preview
+pnpm --dir apps/gateway exec wrangler r2 bucket create aleph-tools-assets-preview
+pnpm --dir apps/gateway exec wrangler queues create aleph-tools-jobs-preview
 
 pnpm --dir apps/gateway exec wrangler d1 create aleph-tools-prod
 pnpm --dir apps/gateway exec wrangler r2 bucket create aleph-tools-assets-prod
@@ -50,7 +50,7 @@ Copy the D1 database ids from the `wrangler d1 create` output.
 Set these locally when generating configs:
 
 ```bash
-export ALEPH_TOOLS_D1_DATABASE_ID_DEV="<dev-d1-id>"
+export ALEPH_TOOLS_D1_DATABASE_ID_PREVIEW="<preview-d1-id>"
 
 export ALEPH_TOOLS_D1_DATABASE_ID_PROD="<prod-d1-id>"
 export ALEPH_TOOLS_CONTAINER_IMAGE="<container-image>"
@@ -59,9 +59,9 @@ export ALEPH_TOOLS_CONTAINER_IMAGE="<container-image>"
 Optional overrides:
 
 ```bash
-export ALEPH_TOOLS_R2_BUCKET_DEV="aleph-tools-assets-dev"
-export ALEPH_TOOLS_QUEUE_DEV="aleph-tools-jobs-dev"
-export ALEPH_TOOLS_DOMAIN_DEV="dev-tools.aleph-cat.com"
+export ALEPH_TOOLS_R2_BUCKET_PREVIEW="aleph-tools-assets-preview"
+export ALEPH_TOOLS_QUEUE_PREVIEW="aleph-tools-jobs-preview"
+export ALEPH_TOOLS_DOMAIN_PREVIEW="preview-tools.aleph-cat.com"
 
 export ALEPH_TOOLS_R2_BUCKET_PROD="aleph-tools-assets-prod"
 export ALEPH_TOOLS_QUEUE_PROD="aleph-tools-jobs-prod"
@@ -78,7 +78,7 @@ export ALEPH_TOOLS_QUEUE_MAX_CONCURRENCY_PROD="4"
 export ALEPH_TOOLS_CONTAINER_INSTANCE_TYPE_PROD="standard-2"
 ```
 
-The Gateway invokes the Python tools engine through an internal Cloudflare Container Durable Object binding. The engine must not be assigned a public route or custom domain. `ALEPH_TOOLS_ENGINE_URL_DEV/PROD` are not part of the Cloudflare deployment path. Local development still uses `apps/gateway/wrangler.local.jsonc` to reach `http://127.0.0.1:8090`.
+The Gateway invokes the Python tools engine through an internal Cloudflare Container Durable Object binding. The engine must not be assigned a public route or custom domain. `ALEPH_TOOLS_ENGINE_URL_PREVIEW/PROD` are not part of the Cloudflare deployment path. Local development still uses `apps/gateway/wrangler.local.jsonc` to reach `http://127.0.0.1:8090`.
 
 ## Tools Container Model Cache
 
@@ -104,32 +104,32 @@ Before promoting an image, run the local benchmark inside the same image or mach
 Set these for each generated config:
 
 ```bash
-pnpm deploy:generate:dev
-pnpm --dir apps/gateway exec wrangler secret put ALEPH_TOOLS_API_KEYS --config wrangler.generated-dev.json
-pnpm --dir apps/gateway exec wrangler secret put WEBHOOK_SIGNING_SECRET --config wrangler.generated-dev.json
-pnpm --dir apps/gateway exec wrangler secret put TOOLS_ENGINE_TOKEN --config wrangler.generated-dev.json
+pnpm deploy:generate:preview
+pnpm --dir apps/gateway exec wrangler secret put ALEPH_TOOLS_API_KEYS --config wrangler.generated-preview.json
+pnpm --dir apps/gateway exec wrangler secret put ALEPH_TOOLS_WEBHOOK_SECRETS --config wrangler.generated-preview.json
+pnpm --dir apps/gateway exec wrangler secret put TOOLS_ENGINE_TOKEN --config wrangler.generated-preview.json
 
 pnpm deploy:generate:prod
 pnpm --dir apps/gateway exec wrangler secret put ALEPH_TOOLS_API_KEYS --config wrangler.generated-prod.json
-pnpm --dir apps/gateway exec wrangler secret put WEBHOOK_SIGNING_SECRET --config wrangler.generated-prod.json
+pnpm --dir apps/gateway exec wrangler secret put ALEPH_TOOLS_WEBHOOK_SECRETS --config wrangler.generated-prod.json
 pnpm --dir apps/gateway exec wrangler secret put TOOLS_ENGINE_TOKEN --config wrangler.generated-prod.json
 ```
 
-`TOOLS_ENGINE_TOKEN` is optional if the tools engine does not enforce internal auth. `ALEPH_TOOLS_API_KEYS` should be a JSON object:
+`TOOLS_ENGINE_TOKEN` is optional if the tools engine does not enforce internal auth. `ALEPH_TOOLS_API_KEYS` and `ALEPH_TOOLS_WEBHOOK_SECRETS` should both be JSON objects keyed by the same client ids:
 
 ```json
-{"example-client-dev":"replace-with-random-token"}
+{"example-client-preview":"replace-with-random-token"}
 ```
 
 ## Deploy Flow
 
-Dev:
+Preview:
 
 ```bash
-pnpm deploy:check:dev
-pnpm deploy:dry-run:dev
-pnpm deploy:migrate:dev
-pnpm deploy:dev
+pnpm deploy:check:preview
+pnpm deploy:dry-run:preview
+pnpm deploy:migrate:preview
+pnpm deploy:preview
 ```
 
 Prod:
@@ -141,7 +141,7 @@ pnpm deploy:migrate:prod
 pnpm deploy:prod
 ```
 
-Do not deploy prod before dev has passed smoke tests.
+Do not deploy prod before preview has passed smoke tests.
 
 `deploy:dry-run:*` passes `--containers-rollout=none`, so it validates the Worker and bindings without building or publishing the container image. Real `deploy:*` commands still require Docker or a compatible container build environment when `ALEPH_TOOLS_CONTAINER_IMAGE` points at a Dockerfile.
 
@@ -153,11 +153,11 @@ Required GitHub secrets or environment variables:
 | --- | --- | --- |
 | `CLOUDFLARE_API_TOKEN` | secret | Deploy and manage Worker resources from CI. |
 | `CLOUDFLARE_ACCOUNT_ID` | secret | Cloudflare account id for Wrangler. |
-| `ALEPH_TOOLS_D1_DATABASE_ID_DEV` | variable or secret | Dev D1 id. |
+| `ALEPH_TOOLS_D1_DATABASE_ID_PREVIEW` | variable or secret | Preview D1 id. |
 | `ALEPH_TOOLS_D1_DATABASE_ID_PROD` | variable or secret | Prod D1 id. |
 | `ALEPH_TOOLS_CONTAINER_IMAGE` | variable or secret | Required. Enables internal Cloudflare Container invocation. |
 | `ALEPH_TOOLS_API_KEYS` | secret | Worker API keys JSON. |
-| `WEBHOOK_SIGNING_SECRET` | secret | HMAC secret for webhook signatures. |
+| `ALEPH_TOOLS_WEBHOOK_SECRETS` | secret | Per-client HMAC secrets for webhook signatures. |
 | `TOOLS_ENGINE_TOKEN` | secret | Optional internal engine auth token. |
 
 The current workflow deploys the Gateway Worker. Build and publishing of the Python engine container image should be handled by your container pipeline, then configured with `ALEPH_TOOLS_CONTAINER_IMAGE`.
@@ -167,7 +167,7 @@ The current workflow deploys the Gateway Worker. Build and publishing of the Pyt
 Replace `BASE_URL` and `API_KEY` with the deployed environment values.
 
 ```bash
-export BASE_URL="https://dev-tools.aleph-cat.com"
+export BASE_URL="https://preview-tools.aleph-cat.com"
 export API_KEY="<client-api-key>"
 
 curl -i "$BASE_URL/health"
@@ -215,11 +215,11 @@ pnpm --dir apps/gateway exec wrangler versions list --config wrangler.generated-
 pnpm --dir apps/gateway exec wrangler rollback --config wrangler.generated-prod.json
 ```
 
-This branch uses a clean `tool_jobs` schema and does not migrate legacy OCR tables. Create fresh dev/prod D1 databases or reset the existing databases before deployment. If a deployment needs to be backed out, roll back Worker code and restore the matching D1 snapshot for that release.
+This branch uses a clean `tool_jobs` schema and does not migrate legacy OCR tables. Create fresh preview/prod D1 databases or reset the existing databases before deployment. If a deployment needs to be backed out, roll back Worker code and restore the matching D1 snapshot for that release.
 
 ## Production Notes
 
-- Keep dev and prod API keys separate.
+- Keep preview and prod API keys separate.
 - Use `Idempotency-Key` for all job creation retries.
 - Treat `data.status`, `data.terminal`, `data.resultAvailable`, `data.outputAvailable`, and `error.code` as the external integration contract.
 - Webhook delivery failure never rolls back a completed job. Use the delivery retry path and the polling fallback endpoints for recovery.

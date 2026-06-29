@@ -21,7 +21,7 @@ Useful variants:
 
 ```bash
 python3 scripts/benchmark-ocr.py --list-fixtures
-python3 scripts/benchmark-ocr.py --mode small --format json --output /tmp/aleph-ocr-benchmark.json
+python3 scripts/benchmark-ocr.py --mode small --format json --output /tmp/aleph-tools-ocr-benchmark.json
 python3 scripts/benchmark-ocr.py --mode small --format ndjson
 ```
 
@@ -92,7 +92,7 @@ Build and benchmark OCR images as `linux/amd64`:
 docker build --platform linux/amd64 -t aleph-tools-container:amd64-test apps/ocr-container
 ```
 
-Local Apple Silicon arm64 containers are useful for image conversion/compression checks, but they are not accepted for OCR inference sign-off. PaddleOCR 3.7.0 and PaddlePaddle 3.2.2 can crash in the arm64 OCR predictor path even when model initialization succeeds. Use amd64 local images and Cloudflare dev smoke tests for OCR acceptance.
+Local Apple Silicon arm64 containers are useful for image conversion/compression checks, but they are not accepted for OCR inference sign-off. PaddleOCR 3.7.0 and PaddlePaddle 3.2.2 can crash in the arm64 OCR predictor path even when model initialization succeeds. Use amd64 local images and Cloudflare preview smoke tests for OCR acceptance.
 
 Validation checks before promoting an image:
 

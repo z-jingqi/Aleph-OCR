@@ -1,6 +1,6 @@
 # Local Testing
 
-This runbook covers the checks to run before deploying Aleph Tools to the Cloudflare dev environment.
+This runbook covers the checks to run before deploying Aleph Tools to the Cloudflare preview environment.
 
 ## Baseline Checks
 

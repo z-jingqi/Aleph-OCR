@@ -84,9 +84,9 @@ Full deployment runbook: [docs/deployment.md](docs/deployment.md).
 Create one set of resources per environment:
 
 ```bash
-wrangler d1 create aleph-tools-dev
-wrangler r2 bucket create aleph-tools-assets-dev
-wrangler queues create aleph-tools-jobs-dev
+wrangler d1 create aleph-tools-preview
+wrangler r2 bucket create aleph-tools-assets-preview
+wrangler queues create aleph-tools-jobs-preview
 ```
 
 Repeat with `prod` names for production:
@@ -101,37 +101,37 @@ Required GitHub environment secrets:
 
 - `CLOUDFLARE_API_TOKEN`
 - `CLOUDFLARE_ACCOUNT_ID`
-- `ALEPH_TOOLS_D1_DATABASE_ID_DEV`
+- `ALEPH_TOOLS_D1_DATABASE_ID_PREVIEW`
 - `ALEPH_TOOLS_D1_DATABASE_ID_PROD`
 - `ALEPH_TOOLS_CONTAINER_IMAGE`, when deploying the tools engine through Cloudflare Containers
 
 Required Worker secrets:
 
-- `ALEPH_TOOLS_API_KEYS`, for example `{"example-client-dev":"...","example-client-prod":"..."}`
-- `WEBHOOK_SIGNING_SECRET`, used to sign async job webhook deliveries
+- `ALEPH_TOOLS_API_KEYS`, for example `{"example-client-preview":"...","example-client-prod":"..."}`
+- `ALEPH_TOOLS_WEBHOOK_SECRETS`, per-client webhook HMAC secrets, for example `{"example-client-preview":"...","example-client-prod":"..."}`
 - optional `TOOLS_ENGINE_TOKEN`, if the engine requires the internal token
 
 Deployment modes:
 
 - Cloudflare Containers: set `ALEPH_TOOLS_CONTAINER_IMAGE`. The Gateway invokes the engine through an internal container Durable Object binding, so the engine does not need a public URL.
-- `ALEPH_TOOLS_ENGINE_URL_DEV/PROD` are not used for Cloudflare deployment. Local development still uses `apps/gateway/wrangler.local.jsonc` to reach `http://127.0.0.1:8090`.
+- `ALEPH_TOOLS_ENGINE_URL_PREVIEW/PROD` are not used for Cloudflare deployment. Local development still uses `apps/gateway/wrangler.local.jsonc` to reach `http://127.0.0.1:8090`.
 
 Generate a Wrangler config, apply D1 migrations, and deploy:
 
 ```bash
-ALEPH_TOOLS_D1_DATABASE_ID_DEV="<d1-id>" \
+ALEPH_TOOLS_D1_DATABASE_ID_PREVIEW="<d1-id>" \
 ALEPH_TOOLS_CONTAINER_IMAGE="<container-image>" \
-node scripts/prepare-wrangler-config.mjs dev
+node scripts/prepare-wrangler-config.mjs preview
 
-pnpm --dir apps/gateway exec wrangler secret put ALEPH_TOOLS_API_KEYS --config wrangler.generated-dev.json
-pnpm --dir apps/gateway exec wrangler secret put WEBHOOK_SIGNING_SECRET --config wrangler.generated-dev.json
-pnpm --dir apps/gateway exec wrangler d1 migrations apply aleph-tools-dev --remote --config wrangler.generated-dev.json
-pnpm --dir apps/gateway exec wrangler deploy --config wrangler.generated-dev.json
+pnpm --dir apps/gateway exec wrangler secret put ALEPH_TOOLS_API_KEYS --config wrangler.generated-preview.json
+pnpm --dir apps/gateway exec wrangler secret put ALEPH_TOOLS_WEBHOOK_SECRETS --config wrangler.generated-preview.json
+pnpm --dir apps/gateway exec wrangler d1 migrations apply aleph-tools-preview --remote --config wrangler.generated-preview.json
+pnpm --dir apps/gateway exec wrangler deploy --config wrangler.generated-preview.json
 ```
 
 Default custom domains:
 
-- dev: `dev-tools.aleph-cat.com`
+- preview: `preview-tools.aleph-cat.com`
 - prod: `tools.aleph-cat.com`
 
 Source files, JSON results, page results, and image tool outputs expire after 7 days by default. A scheduled Worker cleanup marks expired jobs deleted and removes their R2 objects.
@@ -172,11 +172,11 @@ For image OCR, use `POST /v1/tools/image/pipeline` with one upload. The `pipelin
 - `pnpm test` - Run gateway unit tests and container syntax checks.
 - `pnpm clean` - Remove build outputs.
 - `pnpm --filter @aleph-tools/tools-container benchmark:ocr` - Run the local OCR fixture benchmark directly against Python engine functions.
-- `pnpm deploy:check:dev` / `pnpm deploy:check:prod` - Check required deployment environment variables without calling Cloudflare.
-- `pnpm deploy:check:ci:dev` / `pnpm deploy:check:ci:prod` - Strict deployment check including CI and secret values expected by automation.
-- `pnpm deploy:dry-run:dev` / `pnpm deploy:dry-run:prod` - Generate config and run Wrangler deploy validation.
-- `pnpm deploy:migrate:dev` / `pnpm deploy:migrate:prod` - Apply remote D1 migrations.
-- `pnpm deploy:dev` / `pnpm deploy:prod` - Deploy the generated Gateway Worker config.
+- `pnpm deploy:check:preview` / `pnpm deploy:check:prod` - Check required deployment environment variables without calling Cloudflare.
+- `pnpm deploy:check:ci:preview` / `pnpm deploy:check:ci:prod` - Strict deployment check including CI and secret values expected by automation.
+- `pnpm deploy:dry-run:preview` / `pnpm deploy:dry-run:prod` - Generate config and run Wrangler deploy validation.
+- `pnpm deploy:migrate:preview` / `pnpm deploy:migrate:prod` - Apply remote D1 migrations.
+- `pnpm deploy:preview` / `pnpm deploy:prod` - Deploy the generated Gateway Worker config.
 - `pnpm --filter @aleph-tools/gateway d1:migrate:local` - Apply local D1 migrations.
 - `pnpm --filter @aleph-tools/gateway dev` - Run Worker locally.
 - `pnpm --filter @aleph-tools/tools-container dev` - Run FastAPI locally.
