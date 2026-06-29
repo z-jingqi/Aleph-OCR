@@ -9,6 +9,7 @@ import {
   type OcrMode,
   type OcrResult,
 } from '@aleph-tools/shared';
+import { getRandom } from '@cloudflare/containers';
 
 export interface ToolsClientEnv {
   ALEPH_TOOLS_ENGINE_URL?: string;
@@ -18,6 +19,7 @@ export interface ToolsClientEnv {
       fetch(request: Request): Promise<Response>;
     };
   };
+  TOOLS_ENGINE_INSTANCE_COUNT?: string;
 }
 
 export type OcrClientEnv = ToolsClientEnv;
@@ -182,7 +184,9 @@ async function engineFetch(env: ToolsClientEnv, path: string, init: RequestInit)
   try {
     if (env.TOOLS_ENGINE) {
       const request = new Request(new URL(path, 'http://tools-engine.internal'), { ...init, headers });
-      response = await env.TOOLS_ENGINE.getByName('shared').fetch(request);
+      const instanceCount = toolsEngineInstanceCount(env);
+      const container = instanceCount > 1 ? await getRandom(env.TOOLS_ENGINE as never, instanceCount) : env.TOOLS_ENGINE.getByName('shared');
+      response = await container.fetch(request);
     } else {
       const baseUrl = env.ALEPH_TOOLS_ENGINE_URL || 'http://127.0.0.1:8090';
       response = await fetch(`${baseUrl}${path}`, { ...init, headers });
@@ -196,6 +200,11 @@ async function engineFetch(env: ToolsClientEnv, path: string, init: RequestInit)
     throw new OcrEngineError(text || `OCR engine returned ${response.status}`, response.status);
   }
   return response;
+}
+
+function toolsEngineInstanceCount(env: ToolsClientEnv): number {
+  const parsed = Number(env.TOOLS_ENGINE_INSTANCE_COUNT ?? '4');
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 4;
 }
 
 function convertedFilename(filename: string, format: ImageConvertFormat): string {

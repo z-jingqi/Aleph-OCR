@@ -20,9 +20,35 @@ Returns the configured tools engine and capabilities.
 
 The OCR engine container is not public API. External applications must call these Gateway routes only; `/internal/*` routes are private implementation details.
 
+## POST /v1/tools/image/pipeline
+
+Creates one async image pipeline job that runs conversion, compression, then OCR on the compressed output. This is the production image entrypoint.
+
+Multipart fields:
+
+- `file`: PNG, JPEG, WebP, TIFF, BMP, HEIC, or HEIF image.
+- `pipeline`: JSON object string:
+
+```json
+{
+  "convert": { "targetFormat": "webp", "width": 1200, "fit": "inside" },
+  "compress": { "outputFormat": "jpeg", "maxWidth": 1200, "minQuality": 45, "maxQuality": 85 },
+  "ocr": { "ocrMode": "small" }
+}
+```
+
+- `callbackUrl`: optional HTTPS webhook URL for `ready`, `failed`, and `cancelled` notifications.
+- `metadata`: optional JSON object string echoed back in webhook payloads.
+
+Required header:
+
+- `Idempotency-Key`: scoped to the authenticated client. Reusing the same key returns the original job.
+
+`GET /v1/jobs/:jobId/result` returns `tool: "image.pipeline"` with `converted`, `compressed`, and `ocr` fields. `GET /v1/jobs/:jobId/output` downloads the final compressed image.
+
 ## POST /v1/tools/ocr/sync
 
-Synchronous image OCR. Multipart form field:
+Synchronous image OCR. Disabled by default in production; set `ENABLE_SYNC_ENDPOINTS=true` only for local/debug environments. Multipart form field:
 
 - `file`: PNG, JPEG, WebP, TIFF, BMP, HEIC, or HEIF image.
 - `ocrMode`: optional `tiny`, `small`, or `medium`; defaults to `small`.
@@ -34,7 +60,7 @@ Limits:
 
 ## POST /v1/tools/image/convert/sync
 
-Synchronous image conversion. Multipart form fields:
+Synchronous image conversion. Disabled by default in production; set `ENABLE_SYNC_ENDPOINTS=true` only for local/debug environments. Multipart form fields:
 
 - `file`: PNG, JPEG, WebP, TIFF, BMP, HEIC, or HEIF image.
 - `targetFormat`: `png`, `jpeg`, `webp`, or `avif`.
@@ -61,13 +87,13 @@ Images and PDFs are accepted. PDFs are always async and are processed page by pa
 
 ## POST /v1/tools/image/convert
 
-Creates an async image conversion job. It accepts the same conversion fields as the sync route plus optional `callbackUrl`, `metadata`, and `Idempotency-Key`.
+Creates an async image conversion job only when `ENABLE_LEGACY_IMAGE_ENDPOINTS=true`. Production clients should use `POST /v1/tools/image/pipeline`.
 
 Async conversion results are stored in R2. `GET /v1/jobs/:jobId/result` returns metadata and `GET /v1/jobs/:jobId/output` downloads the converted binary file.
 
 ## POST /v1/tools/image/compress/sync
 
-Synchronous image compression. Multipart form fields:
+Synchronous image compression. Disabled by default in production; set `ENABLE_SYNC_ENDPOINTS=true` only for local/debug environments. Multipart form fields:
 
 - `file`: PNG, JPEG, WebP, TIFF, BMP, HEIC, or HEIF image.
 - `targetSizeBytes`: optional positive integer target.
@@ -79,7 +105,7 @@ Returns the compressed binary image directly. Compression does not trigger OCR.
 
 ## POST /v1/tools/image/compress
 
-Creates an async image compression job. It accepts the same compression fields as the sync route plus optional `callbackUrl`, `metadata`, and `Idempotency-Key`.
+Creates an async image compression job only when `ENABLE_LEGACY_IMAGE_ENDPOINTS=true`. Production clients should use `POST /v1/tools/image/pipeline`.
 
 Async compression results are stored in R2. `GET /v1/jobs/:jobId/result` returns compression metadata and `GET /v1/jobs/:jobId/output` downloads the compressed binary file.
 
@@ -119,13 +145,13 @@ Clients can reconnect with `Last-Event-ID` to receive events after the last seen
 
 ## GET /v1/jobs/:jobId/result
 
-Returns the complete OCR result once ready, or image output metadata for `tool: "image.convert"` and `tool: "image.compress"` jobs.
+Returns the complete OCR result once ready, image output metadata for `tool: "image.convert"` and `tool: "image.compress"` jobs, or pipeline metadata for `tool: "image.pipeline"` jobs.
 
 If the job is `queued`, `processing`, or `cancel_requested`, this returns `409`. Cancelled, failed, deleted, and missing result states return an error instead of a partial result.
 
 ## GET /v1/jobs/:jobId/output
 
-Downloads a ready job's binary output. This is used by `image.convert` and `image.compress` jobs. Non-ready jobs return `409`.
+Downloads a ready job's binary output. This is used by `image.convert`, `image.compress`, and `image.pipeline` jobs. Non-ready jobs return `409`.
 
 ## POST /v1/jobs/:jobId/cancel
 
@@ -146,4 +172,4 @@ Headers:
 - `X-Aleph-Tools-Timestamp`: signing timestamp.
 - `X-Aleph-Tools-Signature`: `sha256=<hex hmac>` over `<timestamp>.<raw body>`.
 
-Ready payloads include `event`, `eventId`, `jobId`, `job`, `resultUrl`, `metadata`, and `createdAt`. Image output jobs also include `outputUrl`. Failed payloads include `event`, `eventId`, `jobId`, `job`, `error`, `metadata`, and `createdAt`. Cancelled payloads include `event`, `eventId`, `jobId`, `job`, `metadata`, and `createdAt`.
+Ready payloads include `event`, `eventId`, `jobId`, `job`, `resultUrl`, `metadata`, and `createdAt`. Image output and pipeline jobs also include `outputUrl`. Failed payloads include `event`, `eventId`, `jobId`, `job`, `error`, `metadata`, and `createdAt`. Cancelled payloads include `event`, `eventId`, `jobId`, `job`, `metadata`, and `createdAt`.

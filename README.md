@@ -136,28 +136,20 @@ Default custom domains:
 
 Source files, JSON results, page results, and image tool outputs expire after 7 days by default. A scheduled Worker cleanup marks expired jobs deleted and removes their R2 objects.
 
-Production async jobs are orchestrated through Cloudflare Workflows. Queue messages remain small references only, and PDF OCR runs page by page so a single queue invocation does not need to hold a long-running 100-page job open. Container disk is treated as ephemeral; source files, page results, final results, image outputs, progress snapshots, and events are persisted to R2/D1.
+Production image pipeline jobs are processed through Cloudflare Queues for backpressure and controlled concurrency. PDF OCR still uses Workflows so long documents can run page by page without Queue wall-time pressure. Container disk is treated as ephemeral; source files, page results, final results, image outputs, progress snapshots, and events are persisted to R2/D1.
 
 The Python OCR engine is an internal Gateway dependency. Production calls it through the Cloudflare Container binding only; external applications must call Gateway routes and must not call `/internal/*` container routes directly.
 
 ## Example
 
-```bash
-curl -X POST http://127.0.0.1:8787/v1/tools/ocr/sync \
-  -H 'Authorization: Bearer dev-key' \
-  -F 'file=@sample.png' \
-  -F 'ocrMode=small'
-```
-
-Convert an image synchronously:
+Create a production-style image pipeline job:
 
 ```bash
-curl -X POST http://127.0.0.1:8787/v1/tools/image/convert/sync \
+curl -X POST http://127.0.0.1:8787/v1/tools/image/pipeline \
   -H 'Authorization: Bearer dev-key' \
+  -H 'Idempotency-Key: sample-pipeline-001' \
   -F 'file=@sample.png' \
-  -F 'targetFormat=webp' \
-  -F 'width=1200' \
-  -o converted.webp
+  -F 'pipeline={"convert":{"targetFormat":"webp","width":1200,"fit":"inside"},"compress":{"outputFormat":"jpeg","maxWidth":1200},"ocr":{"ocrMode":"small"}}'
 ```
 
 For PDFs, create an async job:
@@ -171,9 +163,7 @@ curl -X POST http://127.0.0.1:8787/v1/tools/ocr \
 
 Async jobs can include `callbackUrl` and `metadata` multipart fields for webhook notifications. Use `Idempotency-Key` when retrying a create request. Control panels can subscribe to `GET /v1/jobs/:jobId/events` for SSE progress events, and callers can cancel work with `POST /v1/jobs/:jobId/cancel`.
 
-For async image conversion use `POST /v1/tools/image/convert` with PNG, JPEG, WebP, TIFF, BMP, HEIC, or HEIF input; `targetFormat=png|jpeg|webp|avif`; optional `quality`, `width`, `height`; and `fit=contain|cover|inside`. Once ready, `GET /v1/jobs/:jobId/result` returns output metadata and `GET /v1/jobs/:jobId/output` downloads the binary file.
-
-For image compression use `POST /v1/tools/image/compress/sync` or `POST /v1/tools/image/compress` with `targetSizeBytes`, `maxWidth`, `maxHeight`, `minQuality`, `maxQuality`, and `outputFormat=jpeg|webp`. Compression is independent from OCR: the frontend should call compression first, then submit the compressed image to OCR if that is the desired workflow.
+For images, use `POST /v1/tools/image/pipeline` with one upload and a JSON `pipeline` field. Once ready, `GET /v1/jobs/:jobId/result` returns conversion metadata, compression metadata, and OCR output; `GET /v1/jobs/:jobId/output` downloads the final compressed image.
 
 ## Scripts
 

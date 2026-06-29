@@ -107,7 +107,19 @@ Recommended UI behavior:
 
 ## Creating Jobs
 
-OCR async job:
+Image pipeline job, recommended for production image conversion, compression, and OCR:
+
+```bash
+curl -X POST "$BASE_URL/v1/tools/image/pipeline" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Idempotency-Key: pipeline-asset-123" \
+  -F "file=@photo.heic" \
+  -F 'pipeline={"convert":{"targetFormat":"webp","width":1600,"fit":"inside"},"compress":{"outputFormat":"jpeg","maxWidth":1600,"minQuality":45,"maxQuality":85},"ocr":{"ocrMode":"small"}}' \
+  -F 'metadata={"assetId":"asset_123"}' \
+  -F "callbackUrl=https://app.example/webhooks/aleph-tools"
+```
+
+PDF OCR async job:
 
 ```bash
 curl -X POST "$BASE_URL/v1/tools/ocr" \
@@ -119,7 +131,7 @@ curl -X POST "$BASE_URL/v1/tools/ocr" \
   -F "callbackUrl=https://app.example/webhooks/aleph-tools"
 ```
 
-Image conversion async job:
+Legacy standalone image conversion, only when `ENABLE_LEGACY_IMAGE_ENDPOINTS=true`:
 
 ```bash
 curl -X POST "$BASE_URL/v1/tools/image/convert" \
@@ -131,7 +143,7 @@ curl -X POST "$BASE_URL/v1/tools/image/convert" \
   -F "width=1600"
 ```
 
-Image compression async job:
+Legacy standalone image compression, only when `ENABLE_LEGACY_IMAGE_ENDPOINTS=true`:
 
 ```bash
 curl -X POST "$BASE_URL/v1/tools/image/compress" \
@@ -145,7 +157,7 @@ curl -X POST "$BASE_URL/v1/tools/image/compress" \
 
 Use `Idempotency-Key` for all create retries. Reusing the same key with a different file, MIME type, size, tool, operation, OCR mode, conversion options, or compression options returns `IDEMPOTENCY_CONFLICT`.
 
-Compression is independent from OCR. If an application wants OCR on a compressed image, it should call image compression first, download or retain the compressed binary, then create a separate OCR request with that file.
+For images, use the pipeline endpoint instead of creating separate conversion, compression, and OCR jobs. The pipeline returns one job id, one final result, and one compressed binary output.
 
 ## Reading Results
 
@@ -185,7 +197,7 @@ The signature is:
 sha256=<hmac_sha256(WEBHOOK_SIGNING_SECRET, `${timestamp}.${rawBody}`)>
 ```
 
-Ready payloads include `resultUrl`; image conversion and compression ready payloads also include `outputUrl`. Failed and cancelled payloads include a structured `error` object.
+Ready payloads include `resultUrl`; image conversion, compression, and pipeline ready payloads also include `outputUrl`. Failed and cancelled payloads include a structured `error` object.
 
 ## Internal Engine Boundary
 
@@ -195,5 +207,5 @@ The OCR/tools engine Container is private. External applications must not call `
 
 - Retry `retryable: true` errors with exponential backoff.
 - Do not retry `VALIDATION_ERROR`, `UNAUTHORIZED`, `IDEMPOTENCY_CONFLICT`, `JOB_FAILED`, `JOB_CANCELLED`, or `JOB_DELETED` without user action.
-- For `RATE_LIMITED`, wait before creating more jobs for the same client.
+- For `RATE_LIMITED`, wait before creating more jobs for the same client. Honor `Retry-After` when present.
 - For `RESULT_NOT_FOUND` or `OUTPUT_NOT_FOUND`, report the `requestId` and `jobId`; this indicates a service consistency issue.

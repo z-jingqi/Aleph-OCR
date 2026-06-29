@@ -24,6 +24,7 @@ export {
   resetExpiredProcessingJobs,
   setImageCompressResult,
   setImageConvertResult,
+  setImagePipelineResult,
   setJobPageResult,
   setJobResult,
   setJobStatus,

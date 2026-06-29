@@ -1,9 +1,11 @@
 import {
   ImageConvertOptionsSchema,
   ImageCompressOptionsSchema,
+  ImagePipelineOptionsSchema,
   OcrModeSchema,
   type ImageCompressOptions,
   type ImageConvertOptions,
+  type ImagePipelineOptions,
   type OcrMode,
 } from '@aleph-tools/shared';
 
@@ -75,6 +77,26 @@ export async function readImageCompressRequest(request: Request): Promise<
   return { ok: true, file, options: options.options, ...optionalSharedFields(shared) };
 }
 
+export async function readImagePipelineRequest(request: Request): Promise<
+  | { ok: true; file: File; options: ImagePipelineOptions; callbackUrl?: string; metadata?: Record<string, unknown> }
+  | UploadParseError
+> {
+  const contentType = request.headers.get('content-type') ?? '';
+  if (!contentType.includes('multipart/form-data')) {
+    return { ok: false, status: 415, error: 'Expected multipart/form-data' };
+  }
+  const form = await request.formData();
+  const file = form.get('file');
+  if (!(file instanceof File)) {
+    return { ok: false, status: 400, error: 'Please upload a file in the "file" field' };
+  }
+  const shared = parseSharedMultipartFields(form);
+  if (!shared.ok) return shared;
+  const options = parseImagePipelineOptions(form);
+  if (!options.ok) return options;
+  return { ok: true, file, options: options.options, ...optionalSharedFields(shared) };
+}
+
 function parseSharedMultipartFields(form: FormData): { ok: true; callbackUrl?: string; metadata?: Record<string, unknown> } | UploadParseError {
   const callbackUrl = form.get('callbackUrl');
   if (callbackUrl !== null && typeof callbackUrl !== 'string') {
@@ -141,6 +163,22 @@ function parseImageCompressOptions(form: FormData): { ok: true; options: ImageCo
   if (raw.maxQuality === null) return { ok: false, status: 400, error: 'maxQuality must be a number' };
   const parsed = ImageCompressOptionsSchema.safeParse(raw);
   if (!parsed.success) return { ok: false, status: 400, error: parsed.error.issues[0]?.message ?? 'Invalid image compression options' };
+  return { ok: true, options: parsed.data };
+}
+
+function parseImagePipelineOptions(form: FormData): { ok: true; options: ImagePipelineOptions } | { ok: false; status: 400; error: string } {
+  const value = form.get('pipeline');
+  if (typeof value !== 'string' || value.trim() === '') {
+    return { ok: false, status: 400, error: 'pipeline is required' };
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(value);
+  } catch {
+    return { ok: false, status: 400, error: 'pipeline must be a JSON object string' };
+  }
+  const parsed = ImagePipelineOptionsSchema.safeParse(raw);
+  if (!parsed.success) return { ok: false, status: 400, error: parsed.error.issues[0]?.message ?? 'Invalid image pipeline options' };
   return { ok: true, options: parsed.data };
 }
 

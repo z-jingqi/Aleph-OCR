@@ -20,6 +20,11 @@ const values = {
   __D1_DATABASE_ID__: process.env[`ALEPH_TOOLS_D1_DATABASE_ID_${suffix}`] ?? '__D1_DATABASE_ID__',
   __R2_BUCKET__: process.env[`ALEPH_TOOLS_R2_BUCKET_${suffix}`] ?? `aleph-tools-assets-${environment}`,
   __QUEUE__: process.env[`ALEPH_TOOLS_QUEUE_${suffix}`] ?? `aleph-tools-jobs-${environment}`,
+  __MAX_ACTIVE_JOBS_PER_CLIENT__: process.env[`ALEPH_TOOLS_MAX_ACTIVE_JOBS_PER_CLIENT_${suffix}`] ?? '20',
+  __MAX_IMAGE_UPLOAD_BYTES__: process.env[`ALEPH_TOOLS_MAX_IMAGE_UPLOAD_BYTES_${suffix}`] ?? '10485760',
+  __TOOLS_ENGINE_INSTANCE_COUNT__: process.env[`ALEPH_TOOLS_ENGINE_INSTANCE_COUNT_${suffix}`] ?? '4',
+  __QUEUE_MAX_CONCURRENCY__: process.env[`ALEPH_TOOLS_QUEUE_MAX_CONCURRENCY_${suffix}`] ?? '4',
+  __TOOLS_CONTAINER_INSTANCE_TYPE__: process.env[`ALEPH_TOOLS_CONTAINER_INSTANCE_TYPE_${suffix}`] ?? 'standard-2',
 };
 
 for (const name of ['__D1_DATABASE_ID__']) {

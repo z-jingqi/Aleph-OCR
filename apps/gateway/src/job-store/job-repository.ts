@@ -1,5 +1,6 @@
 import type {
   ImageCompressResult,
+  ImagePipelineResult,
   ImageConvertResult,
   ImageCompressFormat,
   JobStage,
@@ -552,6 +553,89 @@ export async function setImageCompressResult(
 
   const updated = await getJobForProcessing(env, job.jobId);
   if (!updated) throw new Error('Ready image compression job not found');
+  const event = await appendJobEvent(env, updated, 'job.ready', { resultUrl: `/v1/jobs/${job.jobId}/result`, outputUrl: `/v1/jobs/${job.jobId}/output` });
+  await createWebhookDeliveryForEvent(env, updated, event, {
+    event: 'tool.job.ready',
+    job: publicJob(updated),
+    resultUrl: `/v1/jobs/${job.jobId}/result`,
+    outputUrl: `/v1/jobs/${job.jobId}/output`,
+  });
+  return updated;
+}
+
+export async function setImagePipelineResult(
+  env: JobStoreEnv & { DB: D1Database; ASSETS: R2Bucket },
+  job: StoredJob,
+  converted: { filename: string; mimeType: string; sizeBytes: number; width: number; height: number; format: 'png' | 'jpeg' | 'webp' | 'avif' },
+  compressed: {
+    bytes: ArrayBuffer;
+    filename: string;
+    mimeType: string;
+    originalSizeBytes: number;
+    width: number;
+    height: number;
+    format: ImageCompressFormat;
+    quality: number;
+    targetSizeBytes?: number;
+    targetMet: boolean;
+  },
+  ocr: OcrResult,
+): Promise<StoredJob> {
+  const outputR2Key = `${OUTPUT_PREFIX}/${job.clientId}/${job.jobId}/${safeR2Name(compressed.filename)}`;
+  await env.ASSETS.put(outputR2Key, compressed.bytes, {
+    httpMetadata: { contentType: compressed.mimeType },
+    customMetadata: { jobId: job.jobId, clientId: job.clientId, tool: 'image.pipeline' },
+  });
+
+  const sizeBytes = compressed.bytes.byteLength;
+  const compressedOutput = {
+    filename: compressed.filename,
+    mimeType: compressed.mimeType,
+    originalSizeBytes: compressed.originalSizeBytes,
+    sizeBytes,
+    compressionRatio: compressed.originalSizeBytes > 0 ? sizeBytes / compressed.originalSizeBytes : 0,
+    ...(compressed.targetSizeBytes ? { targetSizeBytes: compressed.targetSizeBytes } : {}),
+    targetMet: compressed.targetMet,
+    width: compressed.width,
+    height: compressed.height,
+    format: compressed.format,
+    quality: compressed.quality,
+    resultUrl: `/v1/jobs/${job.jobId}/output`,
+  };
+  const resultR2Key = `${RESULT_PREFIX}/${job.clientId}/${job.jobId}.json`;
+  const result: ImagePipelineResult = {
+    jobId: job.jobId,
+    status: 'ready',
+    tool: 'image.pipeline',
+    converted,
+    compressed: compressedOutput,
+    ocr: { ...ocr, jobId: job.jobId, status: 'ready' },
+    metadata: job.callbackMetadata ?? {},
+  };
+  await env.ASSETS.put(resultR2Key, JSON.stringify(result), {
+    httpMetadata: { contentType: 'application/json' },
+    customMetadata: { jobId: job.jobId, clientId: job.clientId, tool: 'image.pipeline' },
+  });
+
+  const completedAt = new Date().toISOString();
+  const update = await env.DB.prepare(
+    `UPDATE tool_jobs
+     SET status = ?, progress = ?, stage = ?, current_page = ?, total_pages = ?, result_r2_key = ?,
+         output_r2_key = ?, output_json = ?, error = NULL, processing_started_at = NULL,
+         processing_lease_until = NULL, completed_at = ?, updated_at = ?
+     WHERE job_id = ? AND status NOT IN ('cancel_requested', 'cancelled', 'deleted')`,
+  )
+    .bind('ready', 100, 'ready', 1, 1, resultR2Key, outputR2Key, JSON.stringify(compressedOutput), completedAt, completedAt, job.jobId)
+    .run();
+  if (!hasChangedRows(update)) {
+    await Promise.all([env.ASSETS.delete(outputR2Key), env.ASSETS.delete(resultR2Key)]);
+    const latest = await getJobForProcessing(env, job.jobId);
+    if (latest && isCancelRequested(latest)) await completeCancelledJob(env, latest);
+    throw new Error('Job was cancelled before result could be stored');
+  }
+
+  const updated = await getJobForProcessing(env, job.jobId);
+  if (!updated) throw new Error('Ready image pipeline job not found');
   const event = await appendJobEvent(env, updated, 'job.ready', { resultUrl: `/v1/jobs/${job.jobId}/result`, outputUrl: `/v1/jobs/${job.jobId}/output` });
   await createWebhookDeliveryForEvent(env, updated, event, {
     event: 'tool.job.ready',

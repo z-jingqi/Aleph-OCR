@@ -68,6 +68,16 @@ export ALEPH_TOOLS_QUEUE_PROD="aleph-tools-jobs-prod"
 export ALEPH_TOOLS_DOMAIN_PROD="tools.aleph-cat.com"
 ```
 
+High-concurrency tuning overrides:
+
+```bash
+export ALEPH_TOOLS_MAX_ACTIVE_JOBS_PER_CLIENT_PROD="20"
+export ALEPH_TOOLS_MAX_IMAGE_UPLOAD_BYTES_PROD="10485760"
+export ALEPH_TOOLS_ENGINE_INSTANCE_COUNT_PROD="4"
+export ALEPH_TOOLS_QUEUE_MAX_CONCURRENCY_PROD="4"
+export ALEPH_TOOLS_CONTAINER_INSTANCE_TYPE_PROD="standard-2"
+```
+
 The Gateway invokes the Python tools engine through an internal Cloudflare Container Durable Object binding. The engine must not be assigned a public route or custom domain. `ALEPH_TOOLS_ENGINE_URL_DEV/PROD` are not part of the Cloudflare deployment path. Local development still uses `apps/gateway/wrangler.local.jsonc` to reach `http://127.0.0.1:8090`.
 
 ## Tools Container Model Cache
@@ -163,15 +173,14 @@ export API_KEY="<client-api-key>"
 curl -i "$BASE_URL/health"
 ```
 
-Create an async image conversion job:
+Create an image pipeline job:
 
 ```bash
-curl -sS -X POST "$BASE_URL/v1/tools/image/convert" \
+curl -sS -X POST "$BASE_URL/v1/tools/image/pipeline" \
   -H "Authorization: Bearer $API_KEY" \
-  -H "Idempotency-Key: smoke-image-convert-001" \
+  -H "Idempotency-Key: smoke-image-pipeline-001" \
   -F "file=@apps/gateway/test/fixtures/images/receipt.png" \
-  -F "targetFormat=webp" \
-  -F "width=800"
+  -F 'pipeline={"convert":{"targetFormat":"webp","width":800,"fit":"inside"},"compress":{"outputFormat":"jpeg","maxWidth":800,"minQuality":45,"maxQuality":85},"ocr":{"ocrMode":"small"}}'
 ```
 
 Check status and result:
@@ -198,18 +207,6 @@ curl -sS -X POST "$BASE_URL/v1/tools/ocr" \
   -F "ocrMode=small"
 ```
 
-Image compression smoke test:
-
-```bash
-curl -sS -X POST "$BASE_URL/v1/tools/image/compress" \
-  -H "Authorization: Bearer $API_KEY" \
-  -H "Idempotency-Key: smoke-image-compress-001" \
-  -F "file=@apps/gateway/test/fixtures/images/receipt.png" \
-  -F "outputFormat=jpeg" \
-  -F "maxWidth=700" \
-  -F "targetSizeBytes=70000"
-```
-
 ## Rollback
 
 For Worker code rollback:
@@ -227,5 +224,6 @@ This branch uses a clean `tool_jobs` schema and does not migrate legacy OCR tabl
 - Use `Idempotency-Key` for all job creation retries.
 - Treat `data.status`, `data.terminal`, `data.resultAvailable`, `data.outputAvailable`, and `error.code` as the external integration contract.
 - Webhook delivery failure never rolls back a completed job. Use the delivery retry path and the polling fallback endpoints for recovery.
-- The production target is PDFs up to 100 pages and single-image conversion jobs.
+- The production target is PDFs up to 100 pages and single-image pipeline jobs.
+- Production image traffic should use `/v1/tools/image/pipeline`; sync and standalone image endpoints are local/debug compatibility paths only.
 - OCR container images should be promoted only after an amd64 image completes image and PDF OCR smoke tests with predownloaded PP-OCRv6 models.

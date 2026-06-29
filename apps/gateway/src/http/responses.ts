@@ -21,6 +21,7 @@ export function jsonError(
     jobId?: string;
     jobStatus?: JobStatus;
     stage?: string;
+    headers?: Record<string, string>;
   },
 ): Response {
   const terminal = options.terminal ?? (options.jobStatus ? ['ready', 'failed', 'cancelled', 'deleted'].includes(options.jobStatus) : false);
@@ -41,6 +42,7 @@ export function jsonError(
       requestId: c.get('requestId'),
     },
     httpStatus,
+    options.headers,
   );
 }
 

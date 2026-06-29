@@ -4,7 +4,7 @@ import {
   isSupportedImageMime,
   type OcrDocument,
 } from '@aleph-tools/shared';
-import { maxActiveJobsPerClient, workflowConfigured } from '../config';
+import { maxActiveJobsPerClient, syncEndpointsEnabled, workflowConfigured } from '../config';
 import { buildIdempotencyFingerprint, normalizeIdempotencyKey } from '../http/idempotency';
 import { engineErrorResponse, jsonError, jsonSuccess, parsedUploadError } from '../http/responses';
 import { readUploadedFile } from '../http/uploads';
@@ -22,6 +22,9 @@ import type { GatewayApp } from './types';
 
 export function registerOcrRoutes(app: GatewayApp) {
   app.post('/v1/tools/ocr/sync', async (c) => {
+    if (!syncEndpointsEnabled(c.env)) {
+      return jsonError(c, 'VALIDATION_ERROR', 'Synchronous OCR is disabled; use async job endpoints', 400, { retryable: false });
+    }
     const parsed = await readUploadedFile(c.req.raw);
     if (!parsed.ok) return parsedUploadError(c, parsed);
 
@@ -84,7 +87,7 @@ export function registerOcrRoutes(app: GatewayApp) {
       }
       const activeLimit = maxActiveJobsPerClient(c.env);
       if (activeLimit !== null && (await countActiveJobsForClient(c.env, c.get('clientId'))) >= activeLimit) {
-        return jsonError(c, 'RATE_LIMITED', 'Client active job limit reached', 429, { retryable: true });
+        return jsonError(c, 'RATE_LIMITED', 'Client active job limit reached', 429, { retryable: true, headers: { 'Retry-After': '30' } });
       }
       const workflowId = `toolswf_${crypto.randomUUID()}`;
       const job = await createJob(c.env, c.get('clientId'), document, file, {

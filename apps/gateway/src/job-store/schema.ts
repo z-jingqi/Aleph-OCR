@@ -1,5 +1,6 @@
 import type {
   ImageCompressOptions,
+  ImagePipelineOptions,
   ImageConvertOptions,
   JobStage,
   JobStatus,
@@ -141,7 +142,7 @@ export type CreateJobOptions = {
   workflowId?: string;
   tool?: ToolType;
   operation?: string;
-  toolOptions?: ImageConvertOptions | ImageCompressOptions | Record<string, unknown>;
+  toolOptions?: ImageConvertOptions | ImageCompressOptions | ImagePipelineOptions | Record<string, unknown>;
 };
 
 export type JobProgressPatch = {

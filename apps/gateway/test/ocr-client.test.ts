@@ -50,6 +50,7 @@ describe('tools engine client', () => {
     const containerFetch = vi.fn(async (request: Request) => Response.json({ ...engineInfo, requestedPath: new URL(request.url).pathname }));
     const env = {
       ALEPH_TOOLS_ENGINE_URL: 'https://external-engine.example.com',
+      TOOLS_ENGINE_INSTANCE_COUNT: '1',
       TOOLS_ENGINE: {
         getByName(name: string) {
           expect(name).toBe('shared');
@@ -145,6 +146,7 @@ describe('tools engine client', () => {
     });
     const env = {
       ALEPH_TOOLS_ENGINE_URL: 'https://external-engine.example.com',
+      TOOLS_ENGINE_INSTANCE_COUNT: '1',
       TOOLS_ENGINE: {
         getByName(name: string) {
           expect(name).toBe('shared');
@@ -156,6 +158,25 @@ describe('tools engine client', () => {
     await expect(ocrPdfBatchFromObject(env, { body: new Blob(['pdf']).stream() }, 'mixed.pdf', 0, 1, 'tiny')).resolves.toMatchObject({
       document: { type: 'pdf' },
     });
+    expect(containerFetch).toHaveBeenCalledTimes(1);
+    expect(globalFetch).not.toHaveBeenCalled();
+  });
+
+  it('routes internal container requests across configured instances', async () => {
+    const globalFetch = vi.spyOn(globalThis, 'fetch');
+    const containerFetch = vi.fn(async (request: Request) => Response.json({ ...engineInfo, requestedPath: new URL(request.url).pathname }));
+    const env = {
+      TOOLS_ENGINE_INSTANCE_COUNT: '4',
+      TOOLS_ENGINE: {
+        getByName(name: string) {
+          expect(name).toBe('random-4');
+          return { fetch: containerFetch };
+        },
+      },
+    };
+
+    await getEngineInfo(env);
+
     expect(containerFetch).toHaveBeenCalledTimes(1);
     expect(globalFetch).not.toHaveBeenCalled();
   });

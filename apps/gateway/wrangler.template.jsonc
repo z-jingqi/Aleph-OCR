@@ -7,7 +7,10 @@
   "workers_dev": true,
   "vars": {
     "APP_ENV": "__ENV__",
-    "JOB_RETENTION_DAYS": "7"
+    "JOB_RETENTION_DAYS": "7",
+    "MAX_ACTIVE_JOBS_PER_CLIENT": "__MAX_ACTIVE_JOBS_PER_CLIENT__",
+    "MAX_IMAGE_UPLOAD_BYTES": "__MAX_IMAGE_UPLOAD_BYTES__",
+    "TOOLS_ENGINE_INSTANCE_COUNT": "__TOOLS_ENGINE_INSTANCE_COUNT__"
   },
   "d1_databases": [
     {
@@ -27,13 +30,14 @@
   ],
   "queues": {
     "producers": [{ "binding": "TOOLS_JOBS", "queue": "__QUEUE__" }],
-    "consumers": [{ "queue": "__QUEUE__", "max_batch_size": 5, "max_batch_timeout": 10 }]
+    "consumers": [{ "queue": "__QUEUE__", "max_batch_size": 1, "max_batch_timeout": 10, "max_concurrency": __QUEUE_MAX_CONCURRENCY__ }]
   },
   "containers": [
     {
       "class_name": "ToolsEngineContainer",
       "image": "__TOOLS_CONTAINER_IMAGE__",
-      "max_instances": 2
+      "instance_type": "__TOOLS_CONTAINER_INSTANCE_TYPE__",
+      "max_instances": __TOOLS_ENGINE_INSTANCE_COUNT__
     }
   ],
   "durable_objects": {

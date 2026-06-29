@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { JobStatusSchema } from './jobs';
+import { OcrResultSchema } from './ocr';
 
 export const ImageConvertFormatSchema = z.enum(['png', 'jpeg', 'webp', 'avif']);
 export type ImageConvertFormat = z.infer<typeof ImageConvertFormatSchema>;
@@ -76,3 +77,23 @@ export const ImageCompressResultSchema = z.object({
   metadata: z.record(z.unknown()).optional(),
 });
 export type ImageCompressResult = z.infer<typeof ImageCompressResultSchema>;
+
+export const ImagePipelineOptionsSchema = z.object({
+  convert: ImageConvertOptionsSchema,
+  compress: ImageCompressOptionsSchema,
+  ocr: z.object({
+    ocrMode: z.enum(['tiny', 'small', 'medium']).default('small'),
+  }).default({ ocrMode: 'small' }),
+});
+export type ImagePipelineOptions = z.infer<typeof ImagePipelineOptionsSchema>;
+
+export const ImagePipelineResultSchema = z.object({
+  jobId: z.string().optional(),
+  status: JobStatusSchema.default('ready'),
+  tool: z.literal('image.pipeline'),
+  converted: ImageConvertOutputSchema.omit({ resultUrl: true }),
+  compressed: ImageCompressOutputSchema,
+  ocr: OcrResultSchema,
+  metadata: z.record(z.unknown()).optional(),
+});
+export type ImagePipelineResult = z.infer<typeof ImagePipelineResultSchema>;

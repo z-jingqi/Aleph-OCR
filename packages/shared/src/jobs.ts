@@ -10,6 +10,8 @@ export const JobStageSchema = z.enum([
   'processing',
   'reading_source',
   'planning_pages',
+  'converting',
+  'compressing',
   'ocr',
   'storing_page',
   'storing_result',

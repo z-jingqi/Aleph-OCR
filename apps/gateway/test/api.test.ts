@@ -49,6 +49,42 @@ describe('gateway API', () => {
     });
   });
 
+  it('disables sync and standalone image endpoints unless explicitly enabled', async () => {
+    const env = fakeEnv();
+    delete env.ENABLE_SYNC_ENDPOINTS;
+    delete env.ENABLE_LEGACY_IMAGE_ENDPOINTS;
+
+    const syncForm = new FormData();
+    syncForm.append('file', await fixtureFile('images/receipt.png', 'image/png'));
+    const syncResponse = await handler.fetch(
+      new Request('https://ocr.test/v1/tools/ocr/sync', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key' },
+        body: syncForm,
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+
+    const legacyForm = new FormData();
+    legacyForm.append('file', await fixtureFile('images/receipt.png', 'image/png'));
+    legacyForm.append('targetFormat', 'webp');
+    const legacyResponse = await handler.fetch(
+      new Request('https://tools.test/v1/tools/image/convert', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'legacy-disabled' },
+        body: legacyForm,
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+
+    expect(syncResponse.status).toBe(400);
+    expect(legacyResponse.status).toBe(400);
+    await expect(syncResponse.json()).resolves.toMatchObject({ success: false, error: { code: 'VALIDATION_ERROR' } });
+    await expect(legacyResponse.json()).resolves.toMatchObject({ success: false, error: { code: 'VALIDATION_ERROR' } });
+  });
+
   it('returns engine OCR modes and mode config', async () => {
     const env = fakeEnv();
     vi.stubGlobal('fetch', vi.fn(async () => Response.json(engineInfo)));
@@ -298,6 +334,194 @@ describe('gateway API', () => {
     expect(second.data.jobId).toBe(first.data.jobId);
     expect(env.rows.get(first.data.jobId)?.tool_options_json).toContain('"targetSizeBytes":1200');
     expect(env.workflowCreates).toHaveLength(1);
+  });
+
+  it('requires idempotency keys for image pipeline jobs', async () => {
+    const env = fakeEnv();
+    const response = await handler.fetch(
+      new Request('https://tools.test/v1/tools/image/pipeline', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key' },
+        body: await pipelineForm(),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'Idempotency-Key is required for image pipeline jobs' },
+    });
+  });
+
+  it('creates image pipeline jobs through the queue with idempotency', async () => {
+    const env = fakeEnv();
+    const makeRequest = async () =>
+      handler.fetch(
+        new Request('https://tools.test/v1/tools/image/pipeline', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'pipeline-asset-123' },
+          body: await pipelineForm({ metadata: { assetId: 'asset_123' } }),
+        }),
+        env,
+        {} as ExecutionContext,
+      );
+
+    const first = (await (await makeRequest()).json()) as { data: { jobId: string; tool: string; operation: string } };
+    const second = (await (await makeRequest()).json()) as { data: { jobId: string } };
+
+    expect(first.data).toMatchObject({ tool: 'image.pipeline', operation: 'image.pipeline' });
+    expect(second.data.jobId).toBe(first.data.jobId);
+    expect(env.rows.get(first.data.jobId)?.tool_options_json).toContain('"targetFormat":"webp"');
+    expect(env.workflowCreates).toHaveLength(0);
+    expect(env.queueMessages).toEqual([{ jobId: first.data.jobId }]);
+  });
+
+  it('returns image pipeline idempotency conflicts for changed options', async () => {
+    const env = fakeEnv();
+    const firstResponse = await handler.fetch(
+      new Request('https://tools.test/v1/tools/image/pipeline', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'pipeline-conflict' },
+        body: await pipelineForm(),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(firstResponse.status).toBe(202);
+
+    const conflictResponse = await handler.fetch(
+      new Request('https://tools.test/v1/tools/image/pipeline', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'pipeline-conflict' },
+        body: await pipelineForm({ pipeline: { convert: { targetFormat: 'jpeg' }, compress: { outputFormat: 'jpeg' }, ocr: { ocrMode: 'small' } } }),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+
+    expect(conflictResponse.status).toBe(409);
+    await expect(conflictResponse.json()).resolves.toMatchObject({
+      success: false,
+      error: { code: 'IDEMPOTENCY_CONFLICT', retryable: false },
+    });
+  });
+
+  it('validates image pipeline options', async () => {
+    const env = fakeEnv();
+    const response = await handler.fetch(
+      new Request('https://tools.test/v1/tools/image/pipeline', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'pipeline-invalid' },
+        body: await pipelineForm({ pipeline: { convert: { targetFormat: 'gif' }, compress: { outputFormat: 'jpeg' }, ocr: { ocrMode: 'small' } } }),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      success: false,
+      error: { code: 'VALIDATION_ERROR', retryable: false },
+    });
+  });
+
+  it('rate-limits image pipeline jobs before storing uploads', async () => {
+    const env = fakeEnv({ MAX_ACTIVE_JOBS_PER_CLIENT: '1' });
+    const firstResponse = await handler.fetch(
+      new Request('https://tools.test/v1/tools/image/pipeline', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'pipeline-limit-1' },
+        body: await pipelineForm(),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(firstResponse.status).toBe(202);
+    const objectCount = env.objects.size;
+
+    const limitedResponse = await handler.fetch(
+      new Request('https://tools.test/v1/tools/image/pipeline', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'pipeline-limit-2' },
+        body: await pipelineForm(),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+
+    expect(limitedResponse.status).toBe(429);
+    expect(limitedResponse.headers.get('Retry-After')).toBe('30');
+    expect(env.objects.size).toBe(objectCount);
+    await expect(limitedResponse.json()).resolves.toMatchObject({
+      success: false,
+      error: { code: 'RATE_LIMITED', retryable: true },
+    });
+  });
+
+  it('processes image pipeline jobs in convert, compress, OCR order', async () => {
+    const env = fakeEnv();
+    const createResponse = await handler.fetch(
+      new Request('https://tools.test/v1/tools/image/pipeline', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer dev-key', 'Idempotency-Key': 'pipeline-process' },
+        body: await pipelineForm({ metadata: { assetId: 'asset_456' } }),
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    const createBody = (await createResponse.json()) as { data: { jobId: string } };
+    const seenPaths: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url = requestUrl(input);
+        seenPaths.push(url.pathname);
+        if (url.pathname === '/internal/image/convert') {
+          return new Response(new Uint8Array([1, 2, 3]), {
+            headers: {
+              'Content-Type': 'image/webp',
+              'X-Aleph-Tools-Filename': 'receipt.webp',
+              'X-Aleph-Tools-Width': '320',
+              'X-Aleph-Tools-Height': '240',
+              'X-Aleph-Tools-Format': 'webp',
+            },
+          });
+        }
+        if (url.pathname === '/internal/image/compress') {
+          return new Response(new Uint8Array([4, 5]), {
+            headers: {
+              'Content-Type': 'image/jpeg',
+              'X-Aleph-Tools-Filename': 'receipt.compressed.jpg',
+              'X-Aleph-Tools-Width': '300',
+              'X-Aleph-Tools-Height': '200',
+              'X-Aleph-Tools-Format': 'jpeg',
+              'X-Aleph-Tools-Original-Size-Bytes': '3',
+              'X-Aleph-Tools-Quality': '72',
+              'X-Aleph-Tools-Target-Met': 'true',
+            },
+          });
+        }
+        return Response.json(sampleOcrResult({ type: 'image', filename: 'receipt.compressed.jpg', mimeType: 'image/jpeg', sizeBytes: 2 }));
+      }),
+    );
+
+    await processJob(env, createBody.data.jobId);
+
+    expect(seenPaths).toEqual(['/internal/image/convert', '/internal/image/compress', '/internal/ocr/image']);
+    const resultResponse = await handler.fetch(
+      new Request(`https://tools.test/v1/jobs/${createBody.data.jobId}/result`, {
+        headers: { Authorization: 'Bearer dev-key' },
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    const result = (await resultResponse.json()) as { data: { tool: string; converted: unknown; compressed: { filename: string }; ocr: unknown } };
+    expect(result.data.tool).toBe('image.pipeline');
+    expect(result.data.converted).toMatchObject({ filename: 'receipt.webp', sizeBytes: 3 });
+    expect(result.data.compressed).toMatchObject({ filename: 'receipt.compressed.jpg', sizeBytes: 2 });
+    expect(env.rows.get(createBody.data.jobId)?.output_r2_key).toContain('receipt.compressed.jpg');
   });
 
   it('creates async OCR jobs with mode and forwards it during processing', async () => {
@@ -915,6 +1139,24 @@ describe('gateway API', () => {
 function requestUrl(input: unknown): URL {
   if (input instanceof Request) return new URL(input.url);
   return new URL(String(input));
+}
+
+async function pipelineForm(options: {
+  pipeline?: unknown;
+  metadata?: Record<string, unknown>;
+} = {}) {
+  const form = new FormData();
+  form.append('file', await fixtureFile('images/receipt.png', 'image/png'));
+  form.append(
+    'pipeline',
+    JSON.stringify(options.pipeline ?? {
+      convert: { targetFormat: 'webp', width: 320, fit: 'inside' },
+      compress: { outputFormat: 'jpeg', maxWidth: 300, minQuality: 50, maxQuality: 80 },
+      ocr: { ocrMode: 'small' },
+    }),
+  );
+  if (options.metadata) form.append('metadata', JSON.stringify(options.metadata));
+  return form;
 }
 
 function samplePdfBatchResult(startPage = 0, pageCount = 2) {

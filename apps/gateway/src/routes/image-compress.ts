@@ -3,7 +3,7 @@ import {
   isSupportedImageMime,
   type OcrDocument,
 } from '@aleph-tools/shared';
-import { maxActiveJobsPerClient, workflowConfigured } from '../config';
+import { legacyImageEndpointsEnabled, maxActiveJobsPerClient, syncEndpointsEnabled, workflowConfigured } from '../config';
 import { escapeHeaderFilename } from '../http/headers';
 import { buildIdempotencyFingerprint, normalizeIdempotencyKey } from '../http/idempotency';
 import { engineErrorResponse, jsonError, jsonSuccess, parsedUploadError } from '../http/responses';
@@ -21,6 +21,9 @@ import type { GatewayApp } from './types';
 
 export function registerImageCompressRoutes(app: GatewayApp) {
   app.post('/v1/tools/image/compress/sync', async (c) => {
+    if (!syncEndpointsEnabled(c.env)) {
+      return jsonError(c, 'VALIDATION_ERROR', 'Synchronous image compression is disabled; use /v1/tools/image/pipeline', 400, { retryable: false });
+    }
     const parsed = await readImageCompressRequest(c.req.raw);
     if (!parsed.ok) return parsedUploadError(c, parsed);
 
@@ -50,6 +53,9 @@ export function registerImageCompressRoutes(app: GatewayApp) {
   });
 
   app.post('/v1/tools/image/compress', async (c) => {
+    if (!legacyImageEndpointsEnabled(c.env)) {
+      return jsonError(c, 'VALIDATION_ERROR', 'Standalone image compression jobs are disabled; use /v1/tools/image/pipeline', 400, { retryable: false });
+    }
     if (!workflowConfigured(c.env)) return jsonError(c, 'WORKFLOW_UNAVAILABLE', 'Tools workflow is not configured', 503, { retryable: true });
     try {
       requireStorage(c.env);
@@ -90,7 +96,7 @@ export function registerImageCompressRoutes(app: GatewayApp) {
       }
       const activeLimit = maxActiveJobsPerClient(c.env);
       if (activeLimit !== null && (await countActiveJobsForClient(c.env, c.get('clientId'))) >= activeLimit) {
-        return jsonError(c, 'RATE_LIMITED', 'Client active job limit reached', 429, { retryable: true });
+        return jsonError(c, 'RATE_LIMITED', 'Client active job limit reached', 429, { retryable: true, headers: { 'Retry-After': '30' } });
       }
       const workflowId = `toolswf_${crypto.randomUUID()}`;
       const job = await createJob(c.env, c.get('clientId'), document, file, {

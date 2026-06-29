@@ -7,6 +7,7 @@ import { requireStorage } from './job-store';
 import { runScheduledMaintenance } from './maintenance';
 import { registerImageCompressRoutes } from './routes/image-compress';
 import { registerImageConvertRoutes } from './routes/image-convert';
+import { registerImagePipelineRoutes } from './routes/image-pipeline';
 import { registerJobRoutes } from './routes/jobs';
 import { registerOcrRoutes } from './routes/ocr';
 import { registerSystemRoutes } from './routes/system';
@@ -21,6 +22,7 @@ app.use('/v1/*', requireApiKey());
 registerOcrRoutes(app);
 registerImageConvertRoutes(app);
 registerImageCompressRoutes(app);
+registerImagePipelineRoutes(app);
 registerJobRoutes(app);
 
 export { ToolsEngineContainer };

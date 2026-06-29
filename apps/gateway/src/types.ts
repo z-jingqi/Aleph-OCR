@@ -13,6 +13,10 @@ export interface Env extends AuthEnv, ToolsClientEnv {
   WEBHOOK_SIGNING_SECRET?: string;
   MAX_JOB_ATTEMPTS?: string;
   MAX_ACTIVE_JOBS_PER_CLIENT?: string;
+  MAX_IMAGE_UPLOAD_BYTES?: string;
+  ENABLE_SYNC_ENDPOINTS?: string;
+  ENABLE_LEGACY_IMAGE_ENDPOINTS?: string;
+  TOOLS_ENGINE_INSTANCE_COUNT?: string;
 }
 
 export type StorageEnv = Env & { DB: D1Database; ASSETS: R2Bucket };
