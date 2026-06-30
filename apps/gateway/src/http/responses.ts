@@ -1,5 +1,5 @@
 import { type ApiErrorCode, type JobStatus } from '@aleph-tools/shared';
-import { OcrEngineError } from '../ocr-client';
+import { OcrEngineError } from '../engine-errors';
 import type { StoredJob } from '../job-store';
 import type { AppContext } from '../types';
 import type { UploadParseError } from './uploads';
@@ -51,11 +51,11 @@ export function parsedUploadError(
   parsed: UploadParseError,
 ): Response {
   const code: ApiErrorCode =
-    parsed.status === 413 ? 'FILE_TOO_LARGE' : parsed.status === 415 ? 'UNSUPPORTED_MEDIA_TYPE' : parsed.error.includes('Unsupported') ? 'UNSUPPORTED_FORMAT' : 'VALIDATION_ERROR';
+    parsed.status === 413 ? 'FILE_TOO_LARGE' : parsed.status === 415 ? 'UNSUPPORTED_MEDIA_TYPE' : parsed.error.startsWith('Unsupported image format') ? 'UNSUPPORTED_FORMAT' : 'VALIDATION_ERROR';
   return jsonError(c, code, parsed.error, parsed.status, { retryable: false });
 }
 
-export function jobStateError(c: AppContext, job: StoredJob, target: 'result' | 'output'): Response {
+export function jobStateError(c: AppContext, job: StoredJob): Response {
   if (job.status === 'deleted') {
     return jsonError(c, 'JOB_DELETED', 'Job has been deleted', 410, {
       retryable: false,
@@ -83,7 +83,7 @@ export function jobStateError(c: AppContext, job: StoredJob, target: 'result' | 
       terminal: true,
     });
   }
-  return jsonError(c, 'JOB_NOT_READY', `Job ${target} is not ready; current status is ${job.status}`, 409, {
+  return jsonError(c, 'JOB_NOT_READY', `Job result is not ready; current status is ${job.status}`, 409, {
     retryable: true,
     jobId: job.jobId,
     jobStatus: job.status,
@@ -95,17 +95,7 @@ export function jobStateError(c: AppContext, job: StoredJob, target: 'result' | 
 export function engineErrorResponse(c: AppContext, error: unknown) {
   if (error instanceof OcrEngineError) {
     const status = isErrorStatus(error.status) ? error.status : 503;
-    const code: ApiErrorCode =
-      status === 413
-        ? 'FILE_TOO_LARGE'
-        : status === 415
-          ? 'UNSUPPORTED_MEDIA_TYPE'
-          : status === 501
-            ? 'UNSUPPORTED_FORMAT'
-            : status >= 500
-              ? 'ENGINE_UNAVAILABLE'
-              : 'VALIDATION_ERROR';
-    return jsonError(c, code, error.message, status, { retryable: status >= 500 && status !== 501 });
+    return jsonError(c, error.code, error.message, status, { retryable: error.retryable });
   }
   return jsonError(c, 'INTERNAL_ERROR', error instanceof Error ? error.message : 'Tools request failed', 500, { retryable: true });
 }

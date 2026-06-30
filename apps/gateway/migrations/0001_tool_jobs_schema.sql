@@ -9,8 +9,6 @@ CREATE TABLE IF NOT EXISTS tool_jobs (
   document_json TEXT NOT NULL,
   source_r2_key TEXT NOT NULL,
   result_r2_key TEXT,
-  output_r2_key TEXT,
-  output_json TEXT,
   error TEXT,
   attempt_count INTEGER NOT NULL DEFAULT 0,
   processing_started_at TEXT,
@@ -49,23 +47,6 @@ CREATE TABLE IF NOT EXISTS tool_job_events (
 
 CREATE UNIQUE INDEX IF NOT EXISTS tool_job_events_job_sequence ON tool_job_events(job_id, sequence);
 CREATE INDEX IF NOT EXISTS tool_job_events_client_job ON tool_job_events(client_id, job_id, sequence);
-
-CREATE TABLE IF NOT EXISTS ocr_job_pages (
-  job_id TEXT NOT NULL,
-  client_id TEXT NOT NULL,
-  page_index INTEGER NOT NULL,
-  status TEXT NOT NULL,
-  attempt_count INTEGER NOT NULL DEFAULT 0,
-  result_r2_key TEXT,
-  error TEXT,
-  processing_started_at TEXT,
-  processing_lease_until TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  PRIMARY KEY (job_id, page_index)
-);
-
-CREATE INDEX IF NOT EXISTS ocr_job_pages_status ON ocr_job_pages(job_id, status, page_index);
 
 CREATE TABLE IF NOT EXISTS tool_webhook_deliveries (
   delivery_id TEXT PRIMARY KEY,

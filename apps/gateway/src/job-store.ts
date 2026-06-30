@@ -12,6 +12,7 @@ export {
   cleanupExpiredJobs,
   claimJobForProcessing,
   completeCancelledJob,
+  countActiveJobs,
   countActiveJobsForClient,
   createJob,
   deleteJob,
@@ -22,23 +23,12 @@ export {
   requeueJobForRetry,
   requestJobCancel,
   resetExpiredProcessingJobs,
-  setImageCompressResult,
-  setImageConvertResult,
-  setImagePipelineResult,
-  setJobPageResult,
   setJobResult,
   setJobStatus,
   updateJobProgress,
   attachWorkflowId,
 } from './job-store/job-repository';
-export { getOutputFile, getResult, getSourceFile } from './job-store/object-store';
-export {
-  claimJobPage,
-  failJobPage,
-  getJobPages,
-  getPageResults,
-  initializeJobPages,
-} from './job-store/page-repository';
+export { getResult, getSourceFile } from './job-store/object-store';
 export { isCancelRequested, isTerminalJob, publicJob } from './job-store/public-snapshot';
 export {
   createWebhookDeliveryForEvent,

@@ -5,7 +5,6 @@ export function fakeEnv(overrides: Partial<FakeGatewayEnv> = {}): FakeGatewayEnv
   const rows = new Map();
   const events: FakeGatewayEnv['events'] = [];
   const deliveries = new Map();
-  const pages: FakeGatewayEnv['pages'] = [];
   const objects = new Map<string, Uint8Array | string>();
   const queueMessages: Array<{ jobId: string }> = [];
   const workflowCreates: Array<{ id?: string; params?: { jobId: string } }> = [];
@@ -18,14 +17,13 @@ export function fakeEnv(overrides: Partial<FakeGatewayEnv> = {}): FakeGatewayEnv
       },
     } as unknown as Queue<{ jobId: string }>,
     ALEPH_TOOLS_API_KEYS: '{"example-client-dev":"dev-key","other-client":"other-key"}',
-    ALEPH_TOOLS_ENGINE_URL: 'https://engine.test',
     ALEPH_TOOLS_WEBHOOK_SECRETS: '{"example-client-dev":"test-webhook-secret","other-client":"other-webhook-secret"}',
+    GOOGLE_VISION_API_KEY: 'test-google-key',
     ENABLE_SYNC_ENDPOINTS: 'true',
-    TOOLS_ENGINE_INSTANCE_COUNT: '1',
+    IMAGES: fakeImagesBinding(),
     rows,
     events,
     deliveries,
-    pages,
     objects,
     queueMessages,
     workflowCreates,
@@ -76,6 +74,38 @@ export function fakeEnv(overrides: Partial<FakeGatewayEnv> = {}): FakeGatewayEnv
     },
   } as unknown as Workflow<{ jobId: string }>;
   return env as FakeGatewayEnv;
+}
+
+function fakeImagesBinding(): ImagesBinding {
+  return {
+    async info() {
+      return { format: 'image/jpeg', fileSize: 3, width: 100, height: 100 };
+    },
+    input() {
+      return {
+        transform() {
+          return this;
+        },
+        draw() {
+          return this;
+        },
+        async output() {
+          return {
+            response() {
+              return new Response(new Uint8Array([1, 2, 3]), { headers: { 'Content-Type': 'image/jpeg' } });
+            },
+            contentType() {
+              return 'image/jpeg';
+            },
+            image() {
+              return new Blob([new Uint8Array([1, 2, 3])]).stream();
+            },
+          } as ImageTransformationResult;
+        },
+      } as ImageTransformer;
+    },
+    hosted: {} as HostedImagesBinding,
+  };
 }
 
 async function normalizeR2Value(value: string | ReadableStream | ArrayBuffer): Promise<Uint8Array | string> {

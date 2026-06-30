@@ -14,7 +14,6 @@
   },
   "dependencies": {
     "@aleph-tools/shared": "workspace:*",
-    "@cloudflare/containers": "^0.3.7",
     "hono": "^4.6.14",
     "zod": "^3.24.1"
   },

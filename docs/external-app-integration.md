@@ -1,22 +1,107 @@
 # External App Integration
 
-This document is the contract external applications should use when integrating with Aleph Tools.
+This document is the integration contract for business applications using Aleph Tools image OCR.
 
-## Response Shape
+## Request Flow
 
-All authenticated JSON endpoints return a request id in the body and as the `X-Request-Id` response header. Callers may send `X-Request-Id`; otherwise the gateway generates `req_<uuid>`.
-
-Successful JSON responses:
-
-```json
-{
-  "success": true,
-  "data": {},
-  "requestId": "req_..."
-}
+```text
+Upload image
+  -> POST /v1/tools/ocr
+  -> receive job snapshot
+  -> use SSE or webhook for terminal state
+  -> GET /v1/jobs/:jobId/result when resultAvailable=true
 ```
 
-Error responses:
+The service supports image OCR only. PDF is rejected with `UNSUPPORTED_MEDIA_TYPE`.
+
+## Authentication
+
+Use the app-specific API key:
+
+```http
+Authorization: Bearer <api-key>
+```
+
+Each API key maps to a stable `clientId`. Jobs are isolated by `clientId`.
+
+## Create OCR Job
+
+```bash
+curl -X POST "$ALEPH_TOOLS_URL/v1/tools/ocr" \
+  -H "Authorization: Bearer $ALEPH_TOOLS_API_KEY" \
+  -H "Idempotency-Key: upload-123" \
+  -F "file=@receipt.heic" \
+  -F 'metadata={"source":"mobile"}' \
+  -F "callbackUrl=https://app.example.com/webhooks/aleph-tools"
+```
+
+The Gateway automatically converts `heic`, `heif`, and `avif` to JPEG before calling Google Vision. There is no conversion toggle and no compression step.
+
+## Job Snapshot
+
+Use these fields for client state:
+
+| Field | Meaning |
+|---|---|
+| `status` | `queued`, `processing`, `cancel_requested`, `cancelled`, `ready`, `failed`, or `deleted`. |
+| `terminal` | True when no more processing will happen. |
+| `cancelable` | True when cancellation can still be requested. |
+| `retryable` | Whether the client may retry the same high-level operation. |
+| `resultAvailable` | True when `/result` can be read. |
+
+## Results
+
+`GET /v1/jobs/:jobId/result` returns OCR JSON only when the job is `ready`.
+
+Important result fields:
+
+- `plainText`: all recognized text.
+- `pages[0].blocks`: Google Vision text blocks with optional bounding boxes and confidence.
+- `metadata.provider`: always `google-vision`.
+- `metadata.feature`: always `DOCUMENT_TEXT_DETECTION`.
+- `metadata.input.converted`: whether the uploaded image was converted before OCR.
+- `metadata.input.originalMimeType`: original MIME type when conversion happened.
+
+The result does not promise table structure or field extraction. Business applications should perform their own domain parsing on top of `plainText` and blocks.
+
+## SSE
+
+`GET /v1/jobs/:jobId/events` returns `text/event-stream`.
+
+Recommended client behavior:
+
+- Connect after creating the job.
+- Persist the last SSE event id.
+- Reconnect with `Last-Event-ID` after refresh or network loss.
+- Treat `job.snapshot` as the current source of truth after reconnect.
+
+## Webhook
+
+Webhook terminal events:
+
+- `ocr.job.ready`
+- `ocr.job.failed`
+- `ocr.job.cancelled`
+
+Headers:
+
+```http
+X-Aleph-Tools-Event-Id: <eventId>
+X-Aleph-Tools-Timestamp: <unix-ms-or-iso>
+X-Aleph-Tools-Signature: sha256=<hmac>
+```
+
+Verify the signature with the per-client webhook secret from `ALEPH_TOOLS_WEBHOOK_SECRETS[clientId]`:
+
+```text
+sha256 = HMAC_SHA256(secret, timestamp + "." + rawBody)
+```
+
+Webhook retry failure never rolls back job state.
+
+## Error Handling
+
+All errors use:
 
 ```json
 {
@@ -36,186 +121,28 @@ Error responses:
 }
 ```
 
-External applications should branch on `error.code`, not `message`.
+Branch on `error.code`, `error.jobStatus`, `error.retryable`, and `error.terminal`.
 
-## Job Snapshot Fields
+Key codes:
 
-`GET /v1/jobs/:jobId`, SSE snapshots, and webhook `job` payloads use the same job shape:
+| Code | Client action |
+|---|---|
+| `UNSUPPORTED_MEDIA_TYPE` | Reject upload or ask user for an image file. |
+| `UNSUPPORTED_FORMAT` | Ask user to export as JPEG/PNG or retry with a supported image. |
+| `FILE_TOO_LARGE` | Ask user to upload a smaller image. |
+| `RATE_LIMITED` | Retry later with backoff. |
+| `ENGINE_UNAVAILABLE` | Retry later if `retryable=true`; otherwise report service configuration issue. |
+| `JOB_NOT_READY` | Continue waiting through SSE/webhook. |
+| `JOB_FAILED` | Show terminal failure and allow user retry with a new upload. |
+| `JOB_CANCELLED` | Stop waiting and reflect cancellation. |
+| `RESULT_NOT_FOUND` | Report `requestId` and `jobId`; this is a service consistency issue. |
 
-```json
-{
-  "jobId": "job_...",
-  "tool": "ocr",
-  "operation": "ocr",
-  "status": "processing",
-  "stage": "ocr",
-  "progress": 50,
-  "currentPage": 1,
-  "totalPages": 10,
-  "terminal": false,
-  "cancelable": true,
-  "retryable": true,
-  "resultAvailable": false,
-  "outputAvailable": false,
-  "createdAt": "...",
-  "updatedAt": "...",
-  "expiresAt": "..."
-}
-```
-
-Status values:
-
-- `queued`: accepted but not yet running.
-- `processing`: actively running.
-- `cancel_requested`: cancellation requested; no new work will start.
-- `ready`: terminal success; result is available.
-- `failed`: terminal failure.
-- `cancelled`: terminal cancellation.
-- `deleted`: terminal deletion or cleanup.
-
-Recommended UI behavior:
-
-- Show progress from `progress`, `stage`, `currentPage`, and `totalPages`.
-- Enable cancel only when `cancelable` is true.
-- Read `/result` only when `resultAvailable` is true.
-- Read `/output` only when `outputAvailable` is true.
-- Treat `terminal` as the authoritative completion marker.
-
-## Error Codes
-
-| Code | HTTP | Retry | Meaning |
-| --- | ---: | --- | --- |
-| `VALIDATION_ERROR` | 400 | No | Invalid form field, metadata, or idempotency header. |
-| `UNAUTHORIZED` | 401 | No | Missing or invalid API key. |
-| `STORAGE_UNAVAILABLE` | 503 | Yes | D1 or R2 binding is unavailable. |
-| `WORKFLOW_UNAVAILABLE` | 503 | Yes | Workflow or queue binding is unavailable. |
-| `ENGINE_UNAVAILABLE` | 503 | Yes | Container/engine call failed or returned a 5xx error. |
-| `UNSUPPORTED_MEDIA_TYPE` | 415/400 | No | Uploaded content type is unsupported. |
-| `UNSUPPORTED_FORMAT` | 501/400 | No | Requested conversion or engine capability is unavailable. |
-| `FILE_TOO_LARGE` | 413 | No | Upload exceeds the configured limit. |
-| `JOB_NOT_FOUND` | 404 | No | Job does not exist or belongs to another client. |
-| `JOB_NOT_READY` | 409 | Yes | Job exists but result/output is not ready. |
-| `JOB_FAILED` | 409 | No | Job reached terminal failure. |
-| `JOB_CANCELLED` | 409 | No | Job was cancelled. |
-| `JOB_DELETED` | 410 | No | Job was deleted or expired. |
-| `RESULT_NOT_FOUND` | 500 | Yes | Job is ready but the result object is missing. |
-| `OUTPUT_NOT_FOUND` | 500 | Yes | Job is ready but the binary output object is missing. |
-| `CANCEL_NOT_ALLOWED` | 409 | No | Cancellation is not valid for the current state. |
-| `IDEMPOTENCY_CONFLICT` | 409 | No | Same key was reused with different file or options. |
-| `RATE_LIMITED` | 429 | Yes | Client has too many active jobs. |
-| `INTERNAL_ERROR` | 500 | Yes | Unexpected gateway error. |
-
-## Creating Jobs
-
-Image pipeline job, recommended for production image OCR. The `pipeline` field is optional; omit it to use necessary conversion, OCR-friendly compression, and `small` OCR:
-
-```bash
-curl -X POST "$BASE_URL/v1/tools/image/pipeline" \
-  -H "Authorization: Bearer $API_KEY" \
-  -H "Idempotency-Key: pipeline-asset-123" \
-  -F "file=@photo.heic" \
-  -F 'metadata={"assetId":"asset_123"}' \
-  -F "callbackUrl=https://app.example/webhooks/aleph-tools"
-```
-
-For JPEG, PNG, TIFF, or BMP images, conversion is skipped even when `convert.enabled` is true. If `convert.enabled=false`, WebP, HEIC, and HEIF cannot be sent to OCR and return `UNSUPPORTED_FORMAT`.
-
-Default pipeline compression is tuned for OCR latency: normal images use long side `1000`, quality up to `75`, and target size around `350KB`; HEIC/HEIF and large phone-photo uploads default to long side `1200`, quality up to `72`, and target size around `350KB`. Override `pipeline.compress` only when the application needs more detail and accepts slower OCR. Pipeline results include `timingsMs.convertMs`, `timingsMs.compressMs`, `timingsMs.ocrPreprocessMs`, `timingsMs.ocrMs`, and `timingsMs.totalMs`.
-
-PDF OCR async job:
-
-```bash
-curl -X POST "$BASE_URL/v1/tools/ocr" \
-  -H "Authorization: Bearer $API_KEY" \
-  -H "Idempotency-Key: upload-123" \
-  -F "file=@document.pdf" \
-  -F "ocrMode=small" \
-  -F "pdfExtractionMode=auto" \
-  -F 'metadata={"documentId":"doc_123"}' \
-  -F "callbackUrl=https://app.example/webhooks/aleph-tools"
-```
-
-For PDFs, `pdfExtractionMode=auto` is the default. It extracts embedded text directly when a page has a usable text layer and runs PP-OCRv6 only for scanned pages. Use `pdfExtractionMode=ocr` to force OCR for every page, or `pdfExtractionMode=text` when a missing text layer should fail the job.
-
-Standalone image conversion, for callers that need conversion without OCR:
-
-```bash
-curl -X POST "$BASE_URL/v1/tools/image/convert" \
-  -H "Authorization: Bearer $API_KEY" \
-  -H "Idempotency-Key: convert-asset-123" \
-  -F "file=@photo.heic" \
-  -F "targetFormat=jpeg" \
-  -F "quality=85" \
-  -F "width=1600"
-```
-
-Standalone image compression, for callers that need compression without OCR:
-
-```bash
-curl -X POST "$BASE_URL/v1/tools/image/compress" \
-  -H "Authorization: Bearer $API_KEY" \
-  -H "Idempotency-Key: compress-asset-123" \
-  -F "file=@photo.jpg" \
-  -F "targetSizeBytes=900000" \
-  -F "maxWidth=1600" \
-  -F "outputFormat=jpeg"
-```
-
-Use `Idempotency-Key` for all create retries. Reusing the same key with a different file, MIME type, size, tool, operation, OCR mode, PDF extraction mode, conversion options, or compression options returns `IDEMPOTENCY_CONFLICT`.
-
-For image OCR, use the pipeline endpoint instead of creating separate conversion, compression, and OCR jobs. The pipeline returns one job id, one final result, and one final binary output. Use standalone conversion or compression only when the caller does not need OCR.
-
-## Reading Results
-
-Use `GET /v1/jobs/:jobId` as the source of truth. Only call:
-
-- `GET /v1/jobs/:jobId/result` when `resultAvailable` is true.
-- `GET /v1/jobs/:jobId/output` when `outputAvailable` is true.
-
-If a caller reads too early, the API returns `JOB_NOT_READY` with `retryable: true`.
-
-PDF OCR results include `extractionMethod` at the top level and on each page. Top-level values are `pdf_text`, `ocr`, or `mixed`; per-page values are `pdf_text` or `ocr`. This reports how text was extracted, not whether tables or fields were semantically understood.
-
-## SSE Progress
-
-Connect to:
-
-```http
-GET /v1/jobs/:jobId/events
-Authorization: Bearer <api-key>
-Last-Event-ID: <last sequence>
-```
-
-The first event is always `job.snapshot`. Reconnect with `Last-Event-ID` after network failures. After a page refresh, load `GET /v1/jobs/:jobId` first, then reconnect to SSE for new events.
-
-## Webhooks
-
-Webhook deliveries are sent for `ready`, `failed`, and `cancelled` terminal states.
-
-Headers:
-
-- `X-Aleph-Tools-Event-Id`
-- `X-Aleph-Tools-Delivery-Id`
-- `X-Aleph-Tools-Timestamp`
-- `X-Aleph-Tools-Signature`
-
-The signature is:
+## Recommended State Machine
 
 ```text
-sha256=<hmac_sha256(clientWebhookSecret, `${timestamp}.${rawBody}`)>
+created -> queued/processing -> ready -> read result
+                         └-> failed
+                         └-> cancelled
 ```
 
-`clientWebhookSecret` is the value configured for the job owner's `clientId` in `ALEPH_TOOLS_WEBHOOK_SECRETS`.
-
-Ready payloads include `resultUrl`; image conversion, compression, and pipeline ready payloads also include `outputUrl`. Failed and cancelled payloads include a structured `error` object.
-
-## Internal Engine Boundary
-
-The OCR/tools engine Container is private. External applications must not call `/internal/*` routes or rely on engine hostnames. In production, the Gateway calls the engine through the Cloudflare Container binding; local development binds the engine only to `127.0.0.1`.
-
-## Retry Strategy
-
-- Retry `retryable: true` errors with exponential backoff.
-- Do not retry `VALIDATION_ERROR`, `UNAUTHORIZED`, `IDEMPOTENCY_CONFLICT`, `JOB_FAILED`, `JOB_CANCELLED`, or `JOB_DELETED` without user action.
-- For `RATE_LIMITED`, wait before creating more jobs for the same client. Honor `Retry-After` when present.
-- For `RESULT_NOT_FOUND` or `OUTPUT_NOT_FOUND`, report the `requestId` and `jobId`; this indicates a service consistency issue.
+Do not parse `message` for business logic. Use stable fields.

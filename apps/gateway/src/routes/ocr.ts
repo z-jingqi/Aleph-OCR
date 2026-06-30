@@ -1,24 +1,14 @@
-import {
-  MAX_SYNC_IMAGE_SIZE_BYTES,
-  inferDocumentType,
-  isOcrNativeImageFile,
-  type OcrDocument,
-} from '@aleph-tools/shared';
-import { maxActiveJobsPerClient, syncEndpointsEnabled, workflowConfigured } from '../config';
-import { normalizeImageUploadFile } from '../http/file-types';
+import { MAX_SYNC_IMAGE_SIZE_BYTES, inferDocumentType, type OcrDocument } from '@aleph-tools/shared';
+import { maxImageUploadBytes, syncEndpointsEnabled, workflowConfigured } from '../config';
+import { validateOcrImageInput } from '../http/file-types';
 import { buildIdempotencyFingerprint, normalizeIdempotencyKey } from '../http/idempotency';
 import { engineErrorResponse, jsonError, jsonSuccess, parsedUploadError } from '../http/responses';
 import { readUploadedFile } from '../http/uploads';
-import {
-  countActiveJobsForClient,
-  createJob,
-  getJobByIdempotencyKey,
-  publicJob,
-  requireStorage,
-} from '../job-store';
+import { createJob, getJobByIdempotencyKey, publicJob, requireStorage } from '../job-store';
 import { ocrImage } from '../ocr-client';
+import { prepareOcrInput } from '../ocr-input';
 import { startToolWorkflow } from '../workflow/runner';
-import { withRequestedOcrModeMetadata } from '../workflow/ocr-result';
+import { activeJobLimitResponse } from './job-limits';
 import type { GatewayApp } from './types';
 
 export function registerOcrRoutes(app: GatewayApp) {
@@ -29,17 +19,18 @@ export function registerOcrRoutes(app: GatewayApp) {
     const parsed = await readUploadedFile(c.req.raw);
     if (!parsed.ok) return parsedUploadError(c, parsed);
 
-    const { ocrMode } = parsed;
-    const file = normalizeImageUploadFile(parsed.file);
-    if (!isOcrNativeImageFile(file.type, file.name)) {
-      return jsonError(c, 'UNSUPPORTED_MEDIA_TYPE', 'Sync OCR only supports image files', 400, { retryable: false });
+    const validationError = validateOcrImageInput(parsed.file);
+    if (validationError === 'OCR only accepts image files') {
+      return jsonError(c, 'UNSUPPORTED_MEDIA_TYPE', validationError, 400, { retryable: false });
     }
-    if (file.size > MAX_SYNC_IMAGE_SIZE_BYTES) {
+    if (validationError) return jsonError(c, 'UNSUPPORTED_FORMAT', validationError, 400, { retryable: false });
+    if (parsed.file.size > MAX_SYNC_IMAGE_SIZE_BYTES) {
       return jsonError(c, 'FILE_TOO_LARGE', 'Image exceeds sync OCR size limit', 413, { retryable: false });
     }
 
     try {
-      const result = withRequestedOcrModeMetadata(await ocrImage(c.env, file, ocrMode), ocrMode);
+      const input = await prepareOcrInput(c.env, parsed.file);
+      const result = await ocrImage(c.env, input.file, input);
       return jsonSuccess(c, result);
     } catch (error) {
       return engineErrorResponse(c, error);
@@ -62,23 +53,33 @@ export function registerOcrRoutes(app: GatewayApp) {
     const parsed = await readUploadedFile(c.req.raw);
     if (!parsed.ok) return parsedUploadError(c, parsed);
 
-    const { callbackUrl, metadata, ocrMode, pdfExtractionMode } = parsed;
     const documentType = inferDocumentType(parsed.file.type, parsed.file.name);
-    if (!documentType) {
-      return jsonError(c, 'UNSUPPORTED_MEDIA_TYPE', `Unsupported file type: ${parsed.file.type || 'unknown'}`, 400, { retryable: false });
+    if (documentType !== 'image') {
+      return jsonError(c, 'UNSUPPORTED_MEDIA_TYPE', 'OCR only accepts image files', 400, { retryable: false });
     }
-    const file = documentType === 'image' ? normalizeImageUploadFile(parsed.file) : parsed.file;
+    const validationError = validateOcrImageInput(parsed.file);
+    if (validationError === 'OCR only accepts image files') {
+      return jsonError(c, 'UNSUPPORTED_MEDIA_TYPE', validationError, 400, { retryable: false });
+    }
+    if (validationError) return jsonError(c, 'UNSUPPORTED_FORMAT', validationError, 400, { retryable: false });
+    if (parsed.file.size > maxImageUploadBytes(c.env)) {
+      return jsonError(c, 'FILE_TOO_LARGE', 'Image exceeds OCR upload size limit', 413, { retryable: false });
+    }
 
+    const file = parsed.file;
     const document: OcrDocument = {
-      type: documentType,
-      filename: file.name || 'upload',
-      mimeType: file.type,
+      type: 'image',
+      filename: file.name || 'image',
+      mimeType: file.type || 'application/octet-stream',
       sizeBytes: file.size,
     };
 
     try {
-      const ocrOptions = documentType === 'pdf' ? { ocrMode, pdfExtractionMode } : { ocrMode };
-      const fingerprint = await buildIdempotencyFingerprint(file, 'ocr', 'ocr', ocrOptions);
+      const fingerprint = await buildIdempotencyFingerprint(file, 'ocr', 'ocr', {
+        provider: 'google-vision',
+        feature: 'DOCUMENT_TEXT_DETECTION',
+        autoConvert: true,
+      });
       if (idempotencyKey) {
         const existing = await getJobByIdempotencyKey(c.env, c.get('clientId'), idempotencyKey);
         if (existing) {
@@ -88,19 +89,17 @@ export function registerOcrRoutes(app: GatewayApp) {
           return jsonSuccess(c, publicJob(existing), 202);
         }
       }
-      const activeLimit = maxActiveJobsPerClient(c.env);
-      if (activeLimit !== null && (await countActiveJobsForClient(c.env, c.get('clientId'))) >= activeLimit) {
-        return jsonError(c, 'RATE_LIMITED', 'Client active job limit reached', 429, { retryable: true, headers: { 'Retry-After': '30' } });
-      }
+      const limitResponse = await activeJobLimitResponse(c);
+      if (limitResponse) return limitResponse;
       const workflowId = `toolswf_${crypto.randomUUID()}`;
       const job = await createJob(c.env, c.get('clientId'), document, file, {
         tool: 'ocr',
         operation: 'ocr',
-        ...(callbackUrl ? { callbackUrl } : {}),
-        ...(metadata ? { callbackMetadata: metadata } : {}),
+        ...(parsed.callbackUrl ? { callbackUrl: parsed.callbackUrl } : {}),
+        ...(parsed.metadata ? { callbackMetadata: parsed.metadata } : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
         idempotencyFingerprint: fingerprint,
-        toolOptions: ocrOptions,
+        toolOptions: { provider: 'google-vision', feature: 'DOCUMENT_TEXT_DETECTION', autoConvert: true },
         workflowId,
       });
       await startToolWorkflow(c.env, job.jobId, job.workflowId ?? workflowId);

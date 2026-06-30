@@ -22,7 +22,6 @@ export function publicJob(job: StoredJob): OcrJob {
     cancelable: job.status === 'queued' || job.status === 'processing',
     retryable: !terminal || job.status === 'failed',
     resultAvailable: job.status === 'ready' && Boolean(job.resultR2Key),
-    outputAvailable: job.status === 'ready' && Boolean(job.outputR2Key),
   };
 }
 

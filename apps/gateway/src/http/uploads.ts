@@ -1,72 +1,9 @@
-import {
-  ImageConvertOptionsSchema,
-  ImageCompressOptionsSchema,
-  ImagePipelineOptionsSchema,
-  OcrModeSchema,
-  PdfExtractionModeSchema,
-  inferDocumentType,
-  type ImageCompressOptions,
-  type ImageConvertOptions,
-  type ImagePipelineOptions,
-  type OcrMode,
-  type PdfExtractionMode,
-} from '@aleph-tools/shared';
-
 export type UploadParseError = { ok: false; status: 400 | 413 | 415; error: string };
 
+const MAX_METADATA_FIELD_BYTES = 4096;
+
 export async function readUploadedFile(request: Request): Promise<
-  | { ok: true; file: File; ocrMode: OcrMode; pdfExtractionMode: PdfExtractionMode; callbackUrl?: string; metadata?: Record<string, unknown> }
-  | UploadParseError
-> {
-  const contentType = request.headers.get('content-type') ?? '';
-  if (!contentType.includes('multipart/form-data')) {
-    return { ok: false, status: 415, error: 'Expected multipart/form-data' };
-  }
-  const form = await request.formData();
-  const file = form.get('file');
-  if (!file || typeof file === 'string') {
-    return { ok: false, status: 400, error: 'Please upload a file in the "file" field' };
-  }
-
-  const shared = parseSharedMultipartFields(form);
-  if (!shared.ok) return shared;
-
-  const parsedOcrMode = parseOcrMode(form);
-  if (!parsedOcrMode.ok) return parsedOcrMode;
-
-  const parsedPdfExtractionMode = inferDocumentType(file.type, file.name) === 'pdf'
-    ? parsePdfExtractionMode(form)
-    : { ok: true as const, pdfExtractionMode: 'auto' as const };
-  if (!parsedPdfExtractionMode.ok) return parsedPdfExtractionMode;
-
-  return { ok: true, file, ocrMode: parsedOcrMode.ocrMode, pdfExtractionMode: parsedPdfExtractionMode.pdfExtractionMode, ...optionalSharedFields(shared) };
-}
-
-export async function readImageConvertRequest(request: Request): Promise<
-  | { ok: true; file: File; options: ImageConvertOptions; callbackUrl?: string; metadata?: Record<string, unknown> }
-  | UploadParseError
-> {
-  const contentType = request.headers.get('content-type') ?? '';
-  if (!contentType.includes('multipart/form-data')) {
-    return { ok: false, status: 415, error: 'Expected multipart/form-data' };
-  }
-  const form = await request.formData();
-  const file = form.get('file');
-  if (!file || typeof file === 'string') {
-    return { ok: false, status: 400, error: 'Please upload a file in the "file" field' };
-  }
-
-  const shared = parseSharedMultipartFields(form);
-  if (!shared.ok) return shared;
-
-  const options = parseImageConvertOptions(form);
-  if (!options.ok) return options;
-
-  return { ok: true, file, options: options.options, ...optionalSharedFields(shared) };
-}
-
-export async function readImageCompressRequest(request: Request): Promise<
-  | { ok: true; file: File; options: ImageCompressOptions; callbackUrl?: string; metadata?: Record<string, unknown> }
+  | { ok: true; file: File; callbackUrl?: string; metadata?: Record<string, unknown> }
   | UploadParseError
 > {
   const contentType = request.headers.get('content-type') ?? '';
@@ -78,31 +15,22 @@ export async function readImageCompressRequest(request: Request): Promise<
   if (!(file instanceof File)) {
     return { ok: false, status: 400, error: 'Please upload a file in the "file" field' };
   }
+  const unsupportedField = firstUnsupportedField(form);
+  if (unsupportedField) {
+    return { ok: false, status: 400, error: `Unsupported OCR upload field: ${unsupportedField}` };
+  }
+
   const shared = parseSharedMultipartFields(form);
   if (!shared.ok) return shared;
-  const options = parseImageCompressOptions(form);
-  if (!options.ok) return options;
-  return { ok: true, file, options: options.options, ...optionalSharedFields(shared) };
+  return { ok: true, file, ...optionalSharedFields(shared) };
 }
 
-export async function readImagePipelineRequest(request: Request): Promise<
-  | { ok: true; file: File; options: ImagePipelineOptions; callbackUrl?: string; metadata?: Record<string, unknown> }
-  | UploadParseError
-> {
-  const contentType = request.headers.get('content-type') ?? '';
-  if (!contentType.includes('multipart/form-data')) {
-    return { ok: false, status: 415, error: 'Expected multipart/form-data' };
+function firstUnsupportedField(form: FormData): string | null {
+  const allowed = new Set(['file', 'callbackUrl', 'metadata']);
+  for (const key of form.keys()) {
+    if (!allowed.has(key)) return key;
   }
-  const form = await request.formData();
-  const file = form.get('file');
-  if (!(file instanceof File)) {
-    return { ok: false, status: 400, error: 'Please upload a file in the "file" field' };
-  }
-  const shared = parseSharedMultipartFields(form);
-  if (!shared.ok) return shared;
-  const options = parseImagePipelineOptions(form);
-  if (!options.ok) return options;
-  return { ok: true, file, options: applyPipelineUploadDefaults(file, options.options, options.raw), ...optionalSharedFields(shared) };
+  return null;
 }
 
 function parseSharedMultipartFields(form: FormData): { ok: true; callbackUrl?: string; metadata?: Record<string, unknown> } | UploadParseError {
@@ -117,6 +45,9 @@ function parseSharedMultipartFields(form: FormData): { ok: true; callbackUrl?: s
   const metadataField = form.get('metadata');
   if (metadataField !== null && typeof metadataField !== 'string') {
     return { ok: false, status: 400, error: 'metadata must be a JSON object string' };
+  }
+  if (metadataField && new TextEncoder().encode(metadataField).byteLength > MAX_METADATA_FIELD_BYTES) {
+    return { ok: false, status: 400, error: `metadata must be ${MAX_METADATA_FIELD_BYTES} bytes or fewer` };
   }
   const metadata = metadataField ? parseMetadata(metadataField) : undefined;
   if (metadataField && !metadata) {
@@ -133,139 +64,10 @@ function optionalSharedFields(shared: { callbackUrl?: string; metadata?: Record<
   };
 }
 
-function parseImageConvertOptions(form: FormData): { ok: true; options: ImageConvertOptions } | { ok: false; status: 400; error: string } {
-  const targetFormat = form.get('targetFormat');
-  const quality = form.get('quality');
-  const width = form.get('width');
-  const height = form.get('height');
-  const fit = form.get('fit');
-  if (typeof targetFormat !== 'string') return { ok: false, status: 400, error: 'targetFormat is required' };
-  const raw = {
-    targetFormat,
-    ...(quality !== null ? { quality: numberField(quality) } : {}),
-    ...(width !== null ? { width: numberField(width) } : {}),
-    ...(height !== null ? { height: numberField(height) } : {}),
-    ...(fit !== null ? { fit } : {}),
-  };
-  if (raw.quality === null) return { ok: false, status: 400, error: 'quality must be a number' };
-  if (raw.width === null) return { ok: false, status: 400, error: 'width must be a number' };
-  if (raw.height === null) return { ok: false, status: 400, error: 'height must be a number' };
-  const parsed = ImageConvertOptionsSchema.safeParse(raw);
-  if (!parsed.success) return { ok: false, status: 400, error: parsed.error.issues[0]?.message ?? 'Invalid image conversion options' };
-  return { ok: true, options: parsed.data };
-}
-
-function parseImageCompressOptions(form: FormData): { ok: true; options: ImageCompressOptions } | { ok: false; status: 400; error: string } {
-  const raw = {
-    targetSizeBytes: optionalNumber(form.get('targetSizeBytes')),
-    maxWidth: optionalNumber(form.get('maxWidth')),
-    maxHeight: optionalNumber(form.get('maxHeight')),
-    minQuality: optionalNumber(form.get('minQuality')),
-    maxQuality: optionalNumber(form.get('maxQuality')),
-    outputFormat: form.get('outputFormat') ?? undefined,
-  };
-  if (raw.targetSizeBytes === null) return { ok: false, status: 400, error: 'targetSizeBytes must be a number' };
-  if (raw.maxWidth === null) return { ok: false, status: 400, error: 'maxWidth must be a number' };
-  if (raw.maxHeight === null) return { ok: false, status: 400, error: 'maxHeight must be a number' };
-  if (raw.minQuality === null) return { ok: false, status: 400, error: 'minQuality must be a number' };
-  if (raw.maxQuality === null) return { ok: false, status: 400, error: 'maxQuality must be a number' };
-  const parsed = ImageCompressOptionsSchema.safeParse(raw);
-  if (!parsed.success) return { ok: false, status: 400, error: parsed.error.issues[0]?.message ?? 'Invalid image compression options' };
-  return { ok: true, options: parsed.data };
-}
-
-function parseImagePipelineOptions(form: FormData): { ok: true; options: ImagePipelineOptions; raw: unknown } | { ok: false; status: 400; error: string } {
-  const value = form.get('pipeline');
-  let raw: unknown = undefined;
-  if (value !== null) {
-    if (typeof value !== 'string' || value.trim() === '') {
-      return { ok: false, status: 400, error: 'pipeline must be a JSON object string' };
-    }
-    try {
-      raw = JSON.parse(value);
-    } catch {
-      return { ok: false, status: 400, error: 'pipeline must be a JSON object string' };
-    }
-  }
-  const parsed = ImagePipelineOptionsSchema.safeParse(raw);
-  if (!parsed.success) return { ok: false, status: 400, error: parsed.error.issues[0]?.message ?? 'Invalid image pipeline options' };
-  return { ok: true, options: parsed.data, raw };
-}
-
-function applyPipelineUploadDefaults(file: File, options: ImagePipelineOptions, raw: unknown): ImagePipelineOptions {
-  if (!options.compress.enabled || !shouldUseAggressivePipelineDefaults(file)) return options;
-  const compressRaw = rawObject(raw)?.compress;
-  const userCompress = rawObject(compressRaw);
-  return {
-    ...options,
-    compress: {
-      ...options.compress,
-      ...(hasOwn(userCompress, 'targetSizeBytes') ? {} : { targetSizeBytes: 350_000 }),
-      ...(hasOwn(userCompress, 'maxWidth') ? {} : { maxWidth: 1200 }),
-      ...(hasOwn(userCompress, 'maxHeight') ? {} : { maxHeight: 1200 }),
-      ...(hasOwn(userCompress, 'maxQuality') ? {} : { maxQuality: 72 }),
-    },
-  };
-}
-
-function shouldUseAggressivePipelineDefaults(file: File): boolean {
-  const mimeType = file.type.toLowerCase();
-  const name = file.name.toLowerCase();
-  if (mimeType === 'image/heic' || mimeType === 'image/heif' || name.endsWith('.heic') || name.endsWith('.heif')) return true;
-  // Workers cannot cheaply decode image dimensions here; this catches typical phone-photo uploads.
-  return file.size >= 3_000_000;
-}
-
-function rawObject(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
-}
-
-function hasOwn(value: Record<string, unknown> | undefined, key: string): boolean {
-  return value !== undefined && Object.prototype.hasOwnProperty.call(value, key);
-}
-
-function parseOcrMode(form: FormData): { ok: true; ocrMode: OcrMode } | { ok: false; status: 400; error: string } {
-  const value = form.get('ocrMode');
-  if (value !== null && typeof value !== 'string') {
-    return { ok: false, status: 400, error: 'ocrMode must be a string' };
-  }
-  const parsed = OcrModeSchema.safeParse(value ?? undefined);
-  if (!parsed.success) {
-    return { ok: false, status: 400, error: 'ocrMode must be one of tiny, small, medium' };
-  }
-  return { ok: true, ocrMode: parsed.data };
-}
-
-function parsePdfExtractionMode(form: FormData): { ok: true; pdfExtractionMode: PdfExtractionMode } | { ok: false; status: 400; error: string } {
-  const value = form.get('pdfExtractionMode');
-  if (value !== null && typeof value !== 'string') {
-    return { ok: false, status: 400, error: 'pdfExtractionMode must be a string' };
-  }
-  const parsed = PdfExtractionModeSchema.safeParse(value ?? undefined);
-  if (!parsed.success) {
-    return { ok: false, status: 400, error: 'pdfExtractionMode must be one of auto, text, ocr' };
-  }
-  return { ok: true, pdfExtractionMode: parsed.data };
-}
-
-function numberField(value: FormDataEntryValue): number | null {
-  if (typeof value !== 'string' || value.trim() === '') return null;
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed)) return null;
-  return parsed;
-}
-
-function optionalNumber(value: FormDataEntryValue | null): number | null | undefined {
-  if (value === null) return undefined;
-  return numberField(value);
-}
-
 function parseMetadata(value: string): Record<string, unknown> | null {
-  if (value.length > 4096) return null;
   try {
     const parsed = JSON.parse(value) as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-    return parsed as Record<string, unknown>;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
   } catch {
     return null;
   }

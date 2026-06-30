@@ -1,30 +1,18 @@
 import type {
-  ImageCompressOutput,
-  ImageCompressResult,
-  ImagePipelineResult,
-  ImageConvertResult,
-  ImageCompressFormat,
-  ImagePipelineCompressStep,
-  ImagePipelineConvertStep,
-  ImagePipelineTimings,
   JobStage,
   JobStatus,
   OcrDocument,
   OcrJob,
   OcrJobEventType,
-  OcrPage,
   OcrResult,
 } from '@aleph-tools/shared';
 import { appendJobEvent, listJobEvents } from './event-repository';
 import { mapJob } from './mappers';
 import { deleteJobObjects } from './object-store';
-import { countReadyPages } from './page-repository';
 import { publicJob, isCancelRequested, isTerminalJob } from './public-snapshot';
 import {
-  PAGE_RESULT_PREFIX,
   PROCESSING_LEASE_SECONDS,
   RESULT_PREFIX,
-  OUTPUT_PREFIX,
   SOURCE_PREFIX,
   TERMINAL_STATUSES,
   hasChangedRows,
@@ -68,9 +56,9 @@ export async function createJob(
     `INSERT INTO tool_jobs
       (job_id, client_id, status, progress, stage, current_page, total_pages, document_json, source_r2_key, result_r2_key,
        error, attempt_count, processing_started_at, processing_lease_until, callback_url, callback_metadata_json,
-       idempotency_key, idempotency_fingerprint, workflow_id, cancelled_at, tool, operation, tool_options_json, output_r2_key, output_json,
+       idempotency_key, idempotency_fingerprint, workflow_id, cancelled_at, tool, operation, tool_options_json,
        completed_at, created_at, updated_at, expires_at)
-     VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, NULL, 0, NULL, NULL, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, NULL, 0, NULL, NULL, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, ?, ?)`,
   )
     .bind(
       jobId,
@@ -142,6 +130,15 @@ export async function countActiveJobsForClient(
   )
     .bind(clientId)
     .all<{ job_id: string }>();
+  return rows.results.length;
+}
+
+export async function countActiveJobs(env: JobStoreEnv & { DB: D1Database }): Promise<number> {
+  const rows = await env.DB.prepare(
+    `SELECT job_id FROM tool_jobs
+     WHERE status IN ('queued', 'processing', 'cancel_requested')
+     LIMIT 1000`,
+  ).all<{ job_id: string }>();
   return rows.results.length;
 }
 
@@ -287,38 +284,6 @@ export async function resetExpiredProcessingJobs(
   return jobIds;
 }
 
-export async function setJobPageResult(
-  env: JobStoreEnv & { DB: D1Database; ASSETS: R2Bucket },
-  job: StoredJob,
-  page: OcrPage,
-): Promise<StoredJob> {
-  const resultR2Key = `${PAGE_RESULT_PREFIX}/${job.clientId}/${job.jobId}/page-${page.pageIndex + 1}.json`;
-  await env.ASSETS.put(resultR2Key, JSON.stringify(page), {
-    httpMetadata: { contentType: 'application/json' },
-    customMetadata: { jobId: job.jobId, clientId: job.clientId, pageIndex: String(page.pageIndex) },
-  });
-
-  const timestamp = new Date().toISOString();
-  await env.DB.prepare(
-    `UPDATE ocr_job_pages
-     SET status = ?, result_r2_key = ?, error = NULL, processing_started_at = NULL,
-         processing_lease_until = NULL, updated_at = ?
-     WHERE job_id = ? AND page_index = ?`,
-  )
-    .bind('ready', resultR2Key, timestamp, job.jobId, page.pageIndex)
-    .run();
-
-  const readyPages = await countReadyPages(env, job.jobId);
-  const totalPages = job.totalPages ?? readyPages;
-  const progress = totalPages > 0 ? Math.min(95, Math.max(10, Math.floor((readyPages / totalPages) * 90))) : job.progress;
-  return updateJobProgress(
-    env,
-    job,
-    { progress, stage: 'storing_page', currentPage: readyPages, totalPages },
-    'job.page.ready',
-  );
-}
-
 export async function updateJobProgress(
   env: JobStoreEnv & { DB: D1Database },
   job: StoredJob,
@@ -428,235 +393,6 @@ export async function setJobResult(
   return updated;
 }
 
-export async function setImageConvertResult(
-  env: JobStoreEnv & { DB: D1Database; ASSETS: R2Bucket },
-  job: StoredJob,
-  output: { bytes: ArrayBuffer; filename: string; mimeType: string; width: number; height: number; format: 'png' | 'jpeg' | 'webp' | 'avif' },
-): Promise<StoredJob> {
-  const outputR2Key = `${OUTPUT_PREFIX}/${job.clientId}/${job.jobId}/${safeR2Name(output.filename)}`;
-  await env.ASSETS.put(outputR2Key, output.bytes, {
-    httpMetadata: { contentType: output.mimeType },
-    customMetadata: { jobId: job.jobId, clientId: job.clientId, tool: 'image.convert' },
-  });
-
-  const resultR2Key = `${RESULT_PREFIX}/${job.clientId}/${job.jobId}.json`;
-  const result: ImageConvertResult = {
-    jobId: job.jobId,
-    status: 'ready',
-    tool: 'image.convert',
-    output: {
-      filename: output.filename,
-      mimeType: output.mimeType,
-      sizeBytes: output.bytes.byteLength,
-      width: output.width,
-      height: output.height,
-      format: output.format,
-      resultUrl: `/v1/jobs/${job.jobId}/output`,
-    },
-    metadata: job.callbackMetadata ?? {},
-  };
-  await env.ASSETS.put(resultR2Key, JSON.stringify(result), {
-    httpMetadata: { contentType: 'application/json' },
-    customMetadata: { jobId: job.jobId, clientId: job.clientId, tool: 'image.convert' },
-  });
-
-  const completedAt = new Date().toISOString();
-  const update = await env.DB.prepare(
-    `UPDATE tool_jobs
-     SET status = ?, progress = ?, stage = ?, current_page = ?, total_pages = ?, result_r2_key = ?,
-         output_r2_key = ?, output_json = ?, error = NULL, processing_started_at = NULL,
-         processing_lease_until = NULL, completed_at = ?, updated_at = ?
-     WHERE job_id = ? AND status NOT IN ('cancel_requested', 'cancelled', 'deleted')`,
-  )
-    .bind('ready', 100, 'ready', 1, 1, resultR2Key, outputR2Key, JSON.stringify(result.output), completedAt, completedAt, job.jobId)
-    .run();
-  if (!hasChangedRows(update)) {
-    await Promise.all([env.ASSETS.delete(outputR2Key), env.ASSETS.delete(resultR2Key)]);
-    const latest = await getJobForProcessing(env, job.jobId);
-    if (latest && isCancelRequested(latest)) await completeCancelledJob(env, latest);
-    throw new Error('Job was cancelled before result could be stored');
-  }
-
-  const updated = await getJobForProcessing(env, job.jobId);
-  if (!updated) throw new Error('Ready image conversion job not found');
-  const event = await appendJobEvent(env, updated, 'job.ready', { resultUrl: `/v1/jobs/${job.jobId}/result`, outputUrl: `/v1/jobs/${job.jobId}/output` });
-  await createWebhookDeliveryForEvent(env, updated, event, {
-    event: 'tool.job.ready',
-    job: publicJob(updated),
-    resultUrl: `/v1/jobs/${job.jobId}/result`,
-    outputUrl: `/v1/jobs/${job.jobId}/output`,
-  });
-  return updated;
-}
-
-export async function setImageCompressResult(
-  env: JobStoreEnv & { DB: D1Database; ASSETS: R2Bucket },
-  job: StoredJob,
-  output: {
-    bytes: ArrayBuffer;
-    filename: string;
-    mimeType: string;
-    originalSizeBytes: number;
-    width: number;
-    height: number;
-    format: ImageCompressFormat;
-    quality: number;
-    targetSizeBytes?: number;
-    targetMet: boolean;
-  },
-): Promise<StoredJob> {
-  const outputR2Key = `${OUTPUT_PREFIX}/${job.clientId}/${job.jobId}/${safeR2Name(output.filename)}`;
-  await env.ASSETS.put(outputR2Key, output.bytes, {
-    httpMetadata: { contentType: output.mimeType },
-    customMetadata: { jobId: job.jobId, clientId: job.clientId, tool: 'image.compress' },
-  });
-
-  const sizeBytes = output.bytes.byteLength;
-  const resultR2Key = `${RESULT_PREFIX}/${job.clientId}/${job.jobId}.json`;
-  const result: ImageCompressResult = {
-    jobId: job.jobId,
-    status: 'ready',
-    tool: 'image.compress',
-    output: {
-      filename: output.filename,
-      mimeType: output.mimeType,
-      originalSizeBytes: output.originalSizeBytes,
-      sizeBytes,
-      compressionRatio: output.originalSizeBytes > 0 ? sizeBytes / output.originalSizeBytes : 0,
-      ...(output.targetSizeBytes ? { targetSizeBytes: output.targetSizeBytes } : {}),
-      targetMet: output.targetMet,
-      width: output.width,
-      height: output.height,
-      format: output.format,
-      quality: output.quality,
-      resultUrl: `/v1/jobs/${job.jobId}/output`,
-    },
-    metadata: job.callbackMetadata ?? {},
-  };
-  await env.ASSETS.put(resultR2Key, JSON.stringify(result), {
-    httpMetadata: { contentType: 'application/json' },
-    customMetadata: { jobId: job.jobId, clientId: job.clientId, tool: 'image.compress' },
-  });
-
-  const completedAt = new Date().toISOString();
-  const update = await env.DB.prepare(
-    `UPDATE tool_jobs
-     SET status = ?, progress = ?, stage = ?, current_page = ?, total_pages = ?, result_r2_key = ?,
-         output_r2_key = ?, output_json = ?, error = NULL, processing_started_at = NULL,
-         processing_lease_until = NULL, completed_at = ?, updated_at = ?
-     WHERE job_id = ? AND status NOT IN ('cancel_requested', 'cancelled', 'deleted')`,
-  )
-    .bind('ready', 100, 'ready', 1, 1, resultR2Key, outputR2Key, JSON.stringify(result.output), completedAt, completedAt, job.jobId)
-    .run();
-  if (!hasChangedRows(update)) {
-    await Promise.all([env.ASSETS.delete(outputR2Key), env.ASSETS.delete(resultR2Key)]);
-    const latest = await getJobForProcessing(env, job.jobId);
-    if (latest && isCancelRequested(latest)) await completeCancelledJob(env, latest);
-    throw new Error('Job was cancelled before result could be stored');
-  }
-
-  const updated = await getJobForProcessing(env, job.jobId);
-  if (!updated) throw new Error('Ready image compression job not found');
-  const event = await appendJobEvent(env, updated, 'job.ready', { resultUrl: `/v1/jobs/${job.jobId}/result`, outputUrl: `/v1/jobs/${job.jobId}/output` });
-  await createWebhookDeliveryForEvent(env, updated, event, {
-    event: 'tool.job.ready',
-    job: publicJob(updated),
-    resultUrl: `/v1/jobs/${job.jobId}/result`,
-    outputUrl: `/v1/jobs/${job.jobId}/output`,
-  });
-  return updated;
-}
-
-export async function setImagePipelineResult(
-  env: JobStoreEnv & { DB: D1Database; ASSETS: R2Bucket },
-  job: StoredJob,
-  converted: ImagePipelineConvertStep,
-  compressed: ImagePipelineCompressStep,
-  output: {
-    bytes: ArrayBuffer;
-    filename: string;
-    mimeType: string;
-    sizeBytes: number;
-    width?: number;
-    height?: number;
-    format?: string;
-  },
-  ocr: OcrResult,
-  timingsMs?: ImagePipelineTimings,
-): Promise<StoredJob> {
-  const outputR2Key = `${OUTPUT_PREFIX}/${job.clientId}/${job.jobId}/${safeR2Name(output.filename)}`;
-  await env.ASSETS.put(outputR2Key, output.bytes, {
-    httpMetadata: { contentType: output.mimeType },
-    customMetadata: { jobId: job.jobId, clientId: job.clientId, tool: 'image.pipeline' },
-  });
-
-  const outputMetadata = {
-    filename: output.filename,
-    mimeType: output.mimeType,
-    sizeBytes: output.bytes.byteLength,
-    ...(output.width ? { width: output.width } : {}),
-    ...(output.height ? { height: output.height } : {}),
-    ...(output.format ? { format: output.format } : {}),
-    resultUrl: `/v1/jobs/${job.jobId}/output`,
-  };
-  const compressedStep = addPipelineOutputUrl(compressed, `/v1/jobs/${job.jobId}/output`);
-  const resultR2Key = `${RESULT_PREFIX}/${job.clientId}/${job.jobId}.json`;
-  const result: ImagePipelineResult = {
-    jobId: job.jobId,
-    status: 'ready',
-    tool: 'image.pipeline',
-    converted,
-    compressed: compressedStep,
-    output: outputMetadata,
-    ocr: { ...ocr, jobId: job.jobId, status: 'ready' },
-    ...(timingsMs ? { timingsMs } : {}),
-    metadata: job.callbackMetadata ?? {},
-  };
-  await env.ASSETS.put(resultR2Key, JSON.stringify(result), {
-    httpMetadata: { contentType: 'application/json' },
-    customMetadata: { jobId: job.jobId, clientId: job.clientId, tool: 'image.pipeline' },
-  });
-
-  const completedAt = new Date().toISOString();
-  const update = await env.DB.prepare(
-    `UPDATE tool_jobs
-     SET status = ?, progress = ?, stage = ?, current_page = ?, total_pages = ?, result_r2_key = ?,
-         output_r2_key = ?, output_json = ?, error = NULL, processing_started_at = NULL,
-         processing_lease_until = NULL, completed_at = ?, updated_at = ?
-     WHERE job_id = ? AND status NOT IN ('cancel_requested', 'cancelled', 'deleted')`,
-  )
-    .bind('ready', 100, 'ready', 1, 1, resultR2Key, outputR2Key, JSON.stringify(outputMetadata), completedAt, completedAt, job.jobId)
-    .run();
-  if (!hasChangedRows(update)) {
-    await Promise.all([env.ASSETS.delete(outputR2Key), env.ASSETS.delete(resultR2Key)]);
-    const latest = await getJobForProcessing(env, job.jobId);
-    if (latest && isCancelRequested(latest)) await completeCancelledJob(env, latest);
-    throw new Error('Job was cancelled before result could be stored');
-  }
-
-  const updated = await getJobForProcessing(env, job.jobId);
-  if (!updated) throw new Error('Ready image pipeline job not found');
-  const event = await appendJobEvent(env, updated, 'job.ready', { resultUrl: `/v1/jobs/${job.jobId}/result`, outputUrl: `/v1/jobs/${job.jobId}/output` });
-  await createWebhookDeliveryForEvent(env, updated, event, {
-    event: 'tool.job.ready',
-    job: publicJob(updated),
-    resultUrl: `/v1/jobs/${job.jobId}/result`,
-    outputUrl: `/v1/jobs/${job.jobId}/output`,
-  });
-  return updated;
-}
-
-function addPipelineOutputUrl(step: ImagePipelineCompressStep, resultUrl: string): ImagePipelineCompressStep {
-  if (step.status !== 'ran' || !step.output) return step;
-  return {
-    ...step,
-    output: {
-      ...step.output,
-      resultUrl,
-    } as ImageCompressOutput,
-  };
-}
-
 export async function failJob(
   env: JobStoreEnv & { DB: D1Database },
   job: StoredJob,
@@ -679,7 +415,7 @@ export async function failJob(
   const event = events.at(-1);
   if (event) {
     await createWebhookDeliveryForEvent(env, updated, event, {
-      event: updated.tool === 'ocr' ? 'ocr.job.failed' : 'tool.job.failed',
+      event: 'ocr.job.failed',
       job: publicJob(updated),
       error: {
         code: 'JOB_FAILED',
@@ -770,7 +506,7 @@ async function createCancelledWebhook(
   event: JobEvent,
 ): Promise<void> {
   await createWebhookDeliveryForEvent(env, job, event, {
-    event: job.tool === 'ocr' ? 'ocr.job.cancelled' : 'tool.job.cancelled',
+    event: 'ocr.job.cancelled',
     job: publicJob(job),
     error: {
       code: 'JOB_CANCELLED',

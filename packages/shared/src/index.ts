@@ -2,7 +2,6 @@ export * from './constants';
 export * from './documents';
 export * from './engine-info';
 export * from './errors';
-export * from './image-tools';
 export * from './jobs';
 export * from './ocr';
 export * from './results';

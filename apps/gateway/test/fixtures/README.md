@@ -8,9 +8,6 @@ Images:
 - `images/invoice-table.png` - generated invoice/table image for layout-style OCR paths.
 - `images/checklist-photo.png` - generated mobile-photo-style note for less ideal image input.
 
-PDFs:
-
-- `pdfs/receipt-single-page.pdf` - single-page image-backed receipt PDF.
-- `pdfs/mixed-two-page.pdf` - two-page image-backed PDF using the invoice and checklist images.
+PDF fixtures are intentionally omitted. The current Gateway version only supports image OCR.
 
 The source images were generated with the built-in Codex `imagegen` tool and then copied into this repository for deterministic test use.

@@ -6,11 +6,10 @@
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "vars": {
-    "ALEPH_TOOLS_ENGINE_URL": "http://127.0.0.1:8090",
     "JOB_RETENTION_DAYS": "7",
+    "MAX_ACTIVE_JOBS_GLOBAL": "1",
     "MAX_ACTIVE_JOBS_PER_CLIENT": "20",
     "MAX_IMAGE_UPLOAD_BYTES": "10485760",
-    "TOOLS_ENGINE_INSTANCE_COUNT": "1",
     "ENABLE_SYNC_ENDPOINTS": "true"
   },
   "d1_databases": [
@@ -22,6 +21,7 @@
     }
   ],
   "r2_buckets": [{ "binding": "ASSETS", "bucket_name": "aleph-tools-local-assets" }],
+  "images": { "binding": "IMAGES", "remote": true },
   "queues": {
     "producers": [{ "binding": "TOOLS_JOBS", "queue": "aleph-tools-local-jobs" }],
     "consumers": [{ "queue": "aleph-tools-local-jobs", "max_batch_size": 1, "max_batch_timeout": 10, "max_concurrency": 1 }]

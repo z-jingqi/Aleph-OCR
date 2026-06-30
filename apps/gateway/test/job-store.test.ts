@@ -7,7 +7,6 @@ import {
   getJobByIdempotencyKey,
   getJob,
   getResult,
-  initializeJobPages,
   listJobEvents,
   requestJobCancel,
   resetExpiredProcessingJobs,
@@ -70,20 +69,6 @@ describe('durable job store', () => {
     expect(terminal).toMatchObject({ status: 'cancelled' });
   });
 
-  it('initializes durable page rows once for PDF jobs', async () => {
-    const env = fakeEnv();
-    const document: OcrDocument = { type: 'pdf', filename: 'bill.pdf', mimeType: 'application/pdf' };
-    const job = await createJob(env, 'example-client-dev', document, new File(['pdf'], 'bill.pdf', { type: 'application/pdf' }));
-
-    await initializeJobPages(env, job, 2);
-    await initializeJobPages(env, job, 2);
-
-    expect(env.pages.map((page) => [page.page_index, page.status])).toEqual([
-      [0, 'queued'],
-      [1, 'queued'],
-    ]);
-  });
-
   it('claims jobs once and writes progress events in sequence', async () => {
     const env = fakeEnv();
     const document: OcrDocument = { type: 'image', filename: 'receipt.png', mimeType: 'image/png', sizeBytes: 3 };
@@ -112,12 +97,17 @@ describe('durable job store', () => {
     const result: OcrResult = {
       jobId: job.jobId,
       status: 'ready',
-      engine: 'test',
-      engineVersion: '1',
+      engine: 'google-vision',
+      engineVersion: 'v1',
       document,
       pages: [{ pageIndex: 0, width: 10, height: 10, text: 'total 12', blocks: [], tables: [], confidence: 0.9 }],
       plainText: 'total 12',
       markdown: 'total 12',
+      metadata: {
+        provider: 'google-vision',
+        feature: 'DOCUMENT_TEXT_DETECTION',
+        input: { filename: 'receipt.png', mimeType: 'image/png', sizeBytes: 3, converted: false },
+      },
     };
 
     const ready = await setJobResult(env, claimed!, result);
@@ -139,12 +129,17 @@ describe('durable job store', () => {
     const job = await createJob(env, 'example-client-dev', document, new File(['abc'], 'receipt.png', { type: 'image/png' }));
     const claimed = await claimJobForProcessing(env, job.jobId);
     const result: OcrResult = {
-      engine: 'test',
-      engineVersion: '1',
+      engine: 'google-vision',
+      engineVersion: 'v1',
       document,
       pages: [],
       plainText: '',
       markdown: '',
+      metadata: {
+        provider: 'google-vision',
+        feature: 'DOCUMENT_TEXT_DETECTION',
+        input: { filename: 'receipt.png', mimeType: 'image/png', sizeBytes: 3, converted: false },
+      },
     };
 
     await expect(setJobResult(env, claimed!, result)).rejects.toThrow('R2 result write failed');
@@ -154,8 +149,8 @@ describe('durable job store', () => {
 
   it('requeues expired processing jobs and deletes expired objects during cleanup', async () => {
     const env = fakeEnv();
-    const document: OcrDocument = { type: 'pdf', filename: 'bill.pdf', mimeType: 'application/pdf' };
-    const job = await createJob(env, 'example-client-dev', document, new File(['pdf'], 'bill.pdf', { type: 'application/pdf' }));
+    const document: OcrDocument = { type: 'image', filename: 'bill.png', mimeType: 'image/png' };
+    const job = await createJob(env, 'example-client-dev', document, new File(['image'], 'bill.png', { type: 'image/png' }));
     const claimed = await claimJobForProcessing(env, job.jobId);
     env.rows.get(claimed!.jobId)!.processing_lease_until = '2000-01-01T00:00:00.000Z';
 
@@ -166,7 +161,7 @@ describe('durable job store', () => {
     const deleted = await deleteJob(env, 'example-client-dev', job.jobId);
     expect(deleted?.status).toBe('deleted');
 
-    const expired = await createJob(env, 'example-client-dev', document, new File(['pdf'], 'bill.pdf', { type: 'application/pdf' }));
+    const expired = await createJob(env, 'example-client-dev', document, new File(['image'], 'bill.png', { type: 'image/png' }));
     env.rows.get(expired.jobId)!.expires_at = '2000-01-01T00:00:00.000Z';
     expect(await cleanupExpiredJobs(env)).toBe(1);
     expect((await getJob(env, 'example-client-dev', expired.jobId))?.status).toBe('deleted');

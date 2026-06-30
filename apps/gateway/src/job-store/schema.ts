@@ -1,14 +1,10 @@
 import type {
-  ImageCompressOptions,
-  ImagePipelineOptions,
-  ImageConvertOptions,
   JobStage,
   JobStatus,
   OcrDocument,
   OcrJob,
   OcrJobEvent,
   OcrJobEventType,
-  OcrJobPageStatus,
   WebhookDeliveryStatus,
   ToolType,
 } from '@aleph-tools/shared';
@@ -43,8 +39,6 @@ export type JobRow = {
   tool: ToolType;
   operation: string | null;
   tool_options_json: string | null;
-  output_r2_key: string | null;
-  output_json: string | null;
   completed_at: string | null;
   created_at: string;
   updated_at: string;
@@ -64,20 +58,6 @@ export type EventRow = {
 export type SequenceRow = { sequence: number };
 
 export type ExpiredProcessingRow = { job_id: string };
-
-export type PageRow = {
-  job_id: string;
-  client_id: string;
-  page_index: number;
-  status: OcrJobPageStatus;
-  attempt_count: number;
-  result_r2_key: string | null;
-  error: string | null;
-  processing_started_at: string | null;
-  processing_lease_until: string | null;
-  created_at: string;
-  updated_at: string;
-};
 
 export type WebhookDeliveryRow = {
   delivery_id: string;
@@ -111,8 +91,6 @@ export type StoredJob = OcrJob & {
   tool: ToolType;
   operation?: string;
   toolOptions?: Record<string, unknown>;
-  outputR2Key?: string;
-  output?: Record<string, unknown>;
 };
 
 export type JobEvent = OcrJobEvent & {
@@ -142,7 +120,7 @@ export type CreateJobOptions = {
   workflowId?: string;
   tool?: ToolType;
   operation?: string;
-  toolOptions?: ImageConvertOptions | ImageCompressOptions | ImagePipelineOptions | Record<string, unknown>;
+  toolOptions?: Record<string, unknown>;
 };
 
 export type JobProgressPatch = {
@@ -157,8 +135,6 @@ export type JobProgressPatch = {
 
 export const SOURCE_PREFIX = 'sources';
 export const RESULT_PREFIX = 'results';
-export const OUTPUT_PREFIX = 'outputs';
-export const PAGE_RESULT_PREFIX = 'page-results';
 export const PROCESSING_LEASE_SECONDS = 15 * 60;
 export const WEBHOOK_RETRY_DELAYS_SECONDS = [60, 5 * 60, 15 * 60, 60 * 60, 6 * 60 * 60];
 export const TERMINAL_STATUSES = new Set<JobStatus>(['ready', 'failed', 'cancelled', 'deleted']);

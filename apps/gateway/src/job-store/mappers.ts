@@ -1,5 +1,5 @@
 import type { OcrDocument } from '@aleph-tools/shared';
-import type { EventRow, JobEvent, JobRow, PageRow, StoredJob, WebhookDelivery, WebhookDeliveryRow } from './schema';
+import type { EventRow, JobEvent, JobRow, StoredJob, WebhookDelivery, WebhookDeliveryRow } from './schema';
 
 export function mapJob(row: JobRow): StoredJob {
   return {
@@ -13,8 +13,6 @@ export function mapJob(row: JobRow): StoredJob {
     document: JSON.parse(row.document_json) as OcrDocument,
     sourceR2Key: row.source_r2_key,
     ...(row.result_r2_key ? { resultR2Key: row.result_r2_key } : {}),
-    ...(row.output_r2_key ? { outputR2Key: row.output_r2_key } : {}),
-    ...(row.output_json ? { output: JSON.parse(row.output_json) as Record<string, unknown> } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     expiresAt: row.expires_at,
@@ -62,8 +60,4 @@ export function mapWebhookDelivery(row: WebhookDeliveryRow): WebhookDelivery {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
-}
-
-export function mapPageIndex(row: PageRow): number {
-  return Number(row.page_index);
 }

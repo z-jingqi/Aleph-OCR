@@ -34,10 +34,6 @@ export class FakeStatement {
     else if (sql.includes('update tool_jobs') && sql.includes('coalesce')) changes = this.updateProgress();
     else if (sql.includes('update tool_jobs') && sql.includes('result_r2_key = ?')) changes = this.setReady();
     else if (sql.includes('update tool_jobs') && sql.includes('result_r2_key = null')) changes = this.setDeleted();
-    else if (sql.includes('insert or ignore into ocr_job_pages')) changes = this.insertPage();
-    else if (sql.includes('update ocr_job_pages') && sql.includes('attempt_count = attempt_count + 1')) changes = this.claimPage();
-    else if (sql.includes('update ocr_job_pages') && sql.includes('result_r2_key = ?')) changes = this.setPageReady();
-    else if (sql.includes('update ocr_job_pages') && sql.includes('error = ?')) changes = this.setPageFailed();
     else if (sql.includes('insert into tool_job_events')) changes = this.insertEvent();
     else if (sql.includes('insert into tool_webhook_deliveries')) changes = this.insertDelivery();
     else if (sql.includes('update tool_webhook_deliveries') && sql.includes('status = ?') && sql.includes('next_attempt_at = null')) changes = this.markDelivered();
@@ -90,8 +86,6 @@ export class FakeStatement {
       tool: (tool as string | null) ?? 'ocr',
       operation: operation as string | null,
       tool_options_json: toolOptionsJson as string | null,
-      output_r2_key: null,
-      output_json: null,
       completed_at: null,
       created_at: createdAt as string,
       updated_at: updatedAt as string,
@@ -210,13 +204,7 @@ export class FakeStatement {
   }
 
   private setReady() {
-    const [status, progress, stage, currentPage, totalPages, resultR2Key, param6, param7, param8, param9, param10] = this.params;
-    const hasOutput = this.params.length === 11;
-    const outputR2Key = hasOutput ? param6 : null;
-    const outputJson = hasOutput ? param7 : null;
-    const completedAt = hasOutput ? param8 : param6;
-    const updatedAt = hasOutput ? param9 : param7;
-    const jobId = hasOutput ? param10 : param8;
+    const [status, progress, stage, currentPage, totalPages, resultR2Key, completedAt, updatedAt, jobId] = this.params;
     const row = this.env.rows.get(jobId as string)!;
     Object.assign(row, {
       status,
@@ -225,7 +213,6 @@ export class FakeStatement {
       current_page: currentPage as number | null,
       total_pages: totalPages as number | null,
       result_r2_key: resultR2Key,
-      ...(hasOutput ? { output_r2_key: outputR2Key as string, output_json: outputJson as string } : {}),
       error: null,
       processing_started_at: null,
       processing_lease_until: null,
@@ -244,75 +231,9 @@ export class FakeStatement {
       progress,
       stage,
       result_r2_key: null,
-      output_r2_key: null,
-      output_json: null,
       processing_started_at: null,
       processing_lease_until: null,
       completed_at: completedAt,
-      updated_at: updatedAt,
-    });
-    return 1;
-  }
-
-  private insertPage() {
-    const [jobId, clientId, pageIndex, status, createdAt, updatedAt] = this.params;
-    const exists = this.env.pages.some((row) => row.job_id === jobId && row.page_index === pageIndex);
-    if (exists) return 0;
-    this.env.pages.push({
-      job_id: jobId as string,
-      client_id: clientId as string,
-      page_index: pageIndex as number,
-      status: status as string,
-      attempt_count: 0,
-      result_r2_key: null,
-      error: null,
-      processing_started_at: null,
-      processing_lease_until: null,
-      created_at: createdAt as string,
-      updated_at: updatedAt as string,
-    });
-    return 1;
-  }
-
-  private claimPage() {
-    const [status, startedAt, leaseUntil, updatedAt, jobId, pageIndex] = this.params;
-    const row = this.env.pages.find((page) => page.job_id === jobId && page.page_index === pageIndex);
-    if (!row || !['queued', 'failed'].includes(row.status)) return 0;
-    Object.assign(row, {
-      status,
-      attempt_count: row.attempt_count + 1,
-      error: null,
-      processing_started_at: startedAt,
-      processing_lease_until: leaseUntil,
-      updated_at: updatedAt,
-    });
-    return 1;
-  }
-
-  private setPageReady() {
-    const [status, resultR2Key, updatedAt, jobId, pageIndex] = this.params;
-    const row = this.env.pages.find((page) => page.job_id === jobId && page.page_index === pageIndex);
-    if (!row) return 0;
-    Object.assign(row, {
-      status,
-      result_r2_key: resultR2Key,
-      error: null,
-      processing_started_at: null,
-      processing_lease_until: null,
-      updated_at: updatedAt,
-    });
-    return 1;
-  }
-
-  private setPageFailed() {
-    const [status, error, updatedAt, jobId, pageIndex] = this.params;
-    const row = this.env.pages.find((page) => page.job_id === jobId && page.page_index === pageIndex);
-    if (!row) return 0;
-    Object.assign(row, {
-      status,
-      error,
-      processing_started_at: null,
-      processing_lease_until: null,
       updated_at: updatedAt,
     });
     return 1;
@@ -393,6 +314,11 @@ export class FakeStatement {
         .sort((a, b) => a.sequence - b.sequence)
         .slice(0, 100);
     }
+    if (sql.includes("where status in ('queued', 'processing', 'cancel_requested')") && !sql.includes('client_id = ?')) {
+      return [...this.env.rows.values()]
+        .filter((row) => ['queued', 'processing', 'cancel_requested'].includes(row.status))
+        .map((row) => ({ job_id: row.job_id }));
+    }
     if (sql.includes("status in ('queued', 'processing', 'cancel_requested')")) {
       const [clientId] = this.params;
       return [...this.env.rows.values()]
@@ -404,12 +330,6 @@ export class FakeStatement {
       return [...this.env.deliveries.values()].filter(
         (row) => ['pending', 'failed'].includes(row.status) && (!row.next_attempt_at || row.next_attempt_at <= (now as string)),
       );
-    }
-    if (sql.includes('from ocr_job_pages')) {
-      const [jobId, status] = this.params;
-      return this.env.pages
-        .filter((row) => row.job_id === jobId && (status === undefined || row.status === status))
-        .sort((a, b) => a.page_index - b.page_index);
     }
     if (sql.includes('where client_id = ? and idempotency_key = ?')) {
       const [clientId, idempotencyKey] = this.params;

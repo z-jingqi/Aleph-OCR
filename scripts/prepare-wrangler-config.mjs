@@ -11,30 +11,23 @@ if (!environment || !['preview', 'prod'].includes(environment)) {
 
 const suffix = environment.toUpperCase();
 const appDir = resolve(repoRoot, 'apps', 'gateway');
-const containerImage = process.env.ALEPH_TOOLS_CONTAINER_IMAGE ?? '';
 const defaultToolsDomain = environment === 'prod' ? 'tools.aleph-cat.com' : 'preview-tools.aleph-cat.com';
 const values = {
   __ENV__: environment,
   __TOOLS_DOMAIN__: process.env[`ALEPH_TOOLS_DOMAIN_${suffix}`] ?? defaultToolsDomain,
-  __TOOLS_CONTAINER_IMAGE__: containerImage,
   __D1_DATABASE_ID__: process.env[`ALEPH_TOOLS_D1_DATABASE_ID_${suffix}`] ?? '__D1_DATABASE_ID__',
   __R2_BUCKET__: process.env[`ALEPH_TOOLS_R2_BUCKET_${suffix}`] ?? `aleph-tools-assets-${environment}`,
   __QUEUE__: process.env[`ALEPH_TOOLS_QUEUE_${suffix}`] ?? `aleph-tools-jobs-${environment}`,
-  __MAX_ACTIVE_JOBS_PER_CLIENT__: process.env[`ALEPH_TOOLS_MAX_ACTIVE_JOBS_PER_CLIENT_${suffix}`] ?? '20',
+  __MAX_ACTIVE_JOBS_PER_CLIENT__: process.env[`ALEPH_TOOLS_MAX_ACTIVE_JOBS_PER_CLIENT_${suffix}`] ?? '1',
+  __MAX_ACTIVE_JOBS_GLOBAL__: process.env[`ALEPH_TOOLS_MAX_ACTIVE_JOBS_GLOBAL_${suffix}`] ?? '1',
   __MAX_IMAGE_UPLOAD_BYTES__: process.env[`ALEPH_TOOLS_MAX_IMAGE_UPLOAD_BYTES_${suffix}`] ?? '10485760',
-  __TOOLS_ENGINE_INSTANCE_COUNT__: process.env[`ALEPH_TOOLS_ENGINE_INSTANCE_COUNT_${suffix}`] ?? '4',
-  __QUEUE_MAX_CONCURRENCY__: process.env[`ALEPH_TOOLS_QUEUE_MAX_CONCURRENCY_${suffix}`] ?? '4',
-  __TOOLS_CONTAINER_INSTANCE_TYPE__: process.env[`ALEPH_TOOLS_CONTAINER_INSTANCE_TYPE_${suffix}`] ?? 'standard-2',
+  __QUEUE_MAX_CONCURRENCY__: process.env[`ALEPH_TOOLS_QUEUE_MAX_CONCURRENCY_${suffix}`] ?? '1',
 };
 
 for (const name of ['__D1_DATABASE_ID__']) {
-if (values[name] === name) {
+  if (values[name] === name) {
     throw new Error(`ALEPH_TOOLS_D1_DATABASE_ID_${suffix} is required.`);
   }
-}
-
-if (!values.__TOOLS_CONTAINER_IMAGE__) {
-  throw new Error('ALEPH_TOOLS_CONTAINER_IMAGE is required for Cloudflare Container deployment.');
 }
 
 let config = await readFile(resolve(appDir, 'wrangler.template.jsonc'), 'utf8');

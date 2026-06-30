@@ -1,6 +1,6 @@
 ALEPH_TOOLS_API_KEYS={"example-client-dev":"dev-key"}
 ALEPH_TOOLS_WEBHOOK_SECRETS={"example-client-dev":"dev-webhook-secret"}
-ALEPH_TOOLS_ENGINE_URL=http://127.0.0.1:8090
-# Optional shared secret for future internal container auth.
-TOOLS_ENGINE_TOKEN=dev-internal-token
+# Prefer service account JSON for production. GOOGLE_VISION_API_KEY is acceptable for local smoke tests.
+GOOGLE_VISION_CREDENTIALS_JSON=
+GOOGLE_VISION_API_KEY=
 JOB_RETENTION_DAYS=7

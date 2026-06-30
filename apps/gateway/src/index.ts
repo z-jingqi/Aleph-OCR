@@ -1,13 +1,9 @@
 import { Hono } from 'hono';
 import { WorkflowEntrypoint } from 'cloudflare:workers';
 import { requireApiKey, type AuthVariables } from './auth';
-import { ToolsEngineContainer } from './container';
 import { requestIdMiddleware } from './http/request-id';
 import { requireStorage } from './job-store';
 import { runScheduledMaintenance } from './maintenance';
-import { registerImageCompressRoutes } from './routes/image-compress';
-import { registerImageConvertRoutes } from './routes/image-convert';
-import { registerImagePipelineRoutes } from './routes/image-pipeline';
 import { registerJobRoutes } from './routes/jobs';
 import { registerOcrRoutes } from './routes/ocr';
 import { registerSystemRoutes } from './routes/system';
@@ -20,12 +16,7 @@ app.use('*', requestIdMiddleware);
 registerSystemRoutes(app);
 app.use('/v1/*', requireApiKey());
 registerOcrRoutes(app);
-registerImageConvertRoutes(app);
-registerImageCompressRoutes(app);
-registerImagePipelineRoutes(app);
 registerJobRoutes(app);
-
-export { ToolsEngineContainer };
 
 export default {
   fetch: app.fetch,

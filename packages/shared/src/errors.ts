@@ -16,7 +16,6 @@ export const ApiErrorCodeSchema = z.enum([
   'JOB_CANCELLED',
   'JOB_DELETED',
   'RESULT_NOT_FOUND',
-  'OUTPUT_NOT_FOUND',
   'CANCEL_NOT_ALLOWED',
   'IDEMPOTENCY_CONFLICT',
   'RATE_LIMITED',

@@ -22,26 +22,10 @@ export type JobRow = {
   tool: string;
   operation: string | null;
   tool_options_json: string | null;
-  output_r2_key: string | null;
-  output_json: string | null;
   completed_at: string | null;
   created_at: string;
   updated_at: string;
   expires_at: string;
-};
-
-export type PageRow = {
-  job_id: string;
-  client_id: string;
-  page_index: number;
-  status: string;
-  attempt_count: number;
-  result_r2_key: string | null;
-  error: string | null;
-  processing_started_at: string | null;
-  processing_lease_until: string | null;
-  created_at: string;
-  updated_at: string;
 };
 
 export type EventRow = {
@@ -74,18 +58,20 @@ export type FakeGatewayEnv = {
   ASSETS: R2Bucket;
   TOOLS_JOBS: Queue<{ jobId: string }>;
   TOOLS_WORKFLOW?: Workflow<{ jobId: string }>;
+  IMAGES?: ImagesBinding;
   ALEPH_TOOLS_API_KEYS: string;
-  ALEPH_TOOLS_ENGINE_URL: string;
   ALEPH_TOOLS_WEBHOOK_SECRETS: string;
+  GOOGLE_VISION_API_KEY?: string;
+  GOOGLE_VISION_CREDENTIALS_JSON?: string;
+  GOOGLE_VISION_ENDPOINT?: string;
   MAX_JOB_ATTEMPTS?: string;
   MAX_ACTIVE_JOBS_PER_CLIENT?: string;
+  MAX_ACTIVE_JOBS_GLOBAL?: string;
   MAX_IMAGE_UPLOAD_BYTES?: string;
   ENABLE_SYNC_ENDPOINTS?: string;
-  TOOLS_ENGINE_INSTANCE_COUNT?: string;
   rows: Map<string, JobRow>;
   events: EventRow[];
   deliveries: Map<string, DeliveryRow>;
-  pages: PageRow[];
   objects: Map<string, Uint8Array | string>;
   queueMessages: Array<{ jobId: string }>;
   workflowCreates: Array<{ id?: string; params?: { jobId: string } }>;

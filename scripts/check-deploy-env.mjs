@@ -35,10 +35,10 @@ const checks = [
     note: environment === 'prod' ? 'Defaults to tools.aleph-cat.com.' : 'Defaults to preview-tools.aleph-cat.com.',
   },
   {
-    label: 'Container image',
-    required: true,
-    names: ['ALEPH_TOOLS_CONTAINER_IMAGE'],
-    note: 'Required. Production deploys the Python tools engine as a Cloudflare Container.',
+    label: 'Google Vision credentials',
+    required: strictCi,
+    names: ['GOOGLE_VISION_CREDENTIALS_JSON', 'GOOGLE_VISION_API_KEY'],
+    note: 'Set as a Worker secret. Service account JSON is recommended for production.',
   },
   {
     label: 'API keys secret value',

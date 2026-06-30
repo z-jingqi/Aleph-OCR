@@ -2,9 +2,8 @@ import {
   imageFormatFromFile,
   isImageConversionInputFile,
   isImageFile,
-  isOcrNativeImageFile,
+  isGoogleVisionNativeImageFile,
   normalizedImageMimeType,
-  type ImagePipelineOptions,
 } from '@aleph-tools/shared';
 
 export function normalizeImageUploadFile(file: File): File {
@@ -15,23 +14,20 @@ export function normalizeImageUploadFile(file: File): File {
 
 export function imageUploadKind(file: File): 'not_image' | 'unknown_image' | 'convertible' | 'ocr_native' {
   if (!isImageFile(file.type, file.name)) return 'not_image';
-  if (isOcrNativeImageFile(file.type, file.name)) return 'ocr_native';
+  if (isGoogleVisionNativeImageFile(file.type, file.name)) return 'ocr_native';
   if (isImageConversionInputFile(file.type, file.name)) return 'convertible';
   return 'unknown_image';
 }
 
-export function validatePipelineImageInput(file: File, options: ImagePipelineOptions): string | null {
+export function validateOcrImageInput(file: File): string | null {
   const kind = imageUploadKind(file);
-  if (kind === 'not_image') return 'Pipeline only accepts image files';
+  if (kind === 'not_image') return 'OCR only accepts image files';
   if (kind === 'unknown_image') return `Unsupported image format: ${file.type || imageFormatFromFile(file.type, file.name) || 'unknown'}`;
-  if (!options.convert.enabled && kind !== 'ocr_native') {
-    return 'Image format is not supported by OCR when conversion is disabled';
-  }
   return null;
 }
 
-export function shouldConvertForOcr(file: File, options: ImagePipelineOptions): boolean {
-  return options.convert.enabled && !isOcrNativeImageFile(file.type, file.name);
+export function shouldConvertForOcr(file: File): boolean {
+  return !isGoogleVisionNativeImageFile(file.type, file.name);
 }
 
 export function fileInfo(file: File) {

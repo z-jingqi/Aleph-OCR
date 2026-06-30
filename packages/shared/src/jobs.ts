@@ -9,11 +9,8 @@ export const JobStageSchema = z.enum([
   'queued',
   'processing',
   'reading_source',
-  'planning_pages',
   'converting',
-  'compressing',
   'ocr',
-  'storing_page',
   'storing_result',
   'cancel_requested',
   'cancelled',
@@ -45,7 +42,6 @@ export const OcrJobSchema = z.object({
   cancelable: z.boolean().optional(),
   retryable: z.boolean().optional(),
   resultAvailable: z.boolean().optional(),
-  outputAvailable: z.boolean().optional(),
 });
 export type OcrJob = z.infer<typeof OcrJobSchema>;
 
@@ -53,7 +49,6 @@ export const OcrJobEventTypeSchema = z.enum([
   'job.created',
   'job.status',
   'job.progress',
-  'job.page.ready',
   'job.ready',
   'job.failed',
   'job.cancel_requested',

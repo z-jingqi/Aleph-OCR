@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createJob, getJob, requestJobCancel } from '../src/job-store';
 import { processJob } from '../src/index';
-import { fakeEnv, sampleOcrResult } from './helpers';
+import { fakeEnv, sampleGoogleVisionResponse } from './helpers';
 import type { OcrDocument } from '@aleph-tools/shared';
 
 describe('webhook delivery', () => {
@@ -21,7 +21,7 @@ describe('webhook delivery', () => {
       'fetch',
       vi
         .fn()
-        .mockResolvedValueOnce(Response.json(sampleOcrResult(document)))
+        .mockResolvedValueOnce(Response.json(sampleGoogleVisionResponse()))
         .mockImplementationOnce(async (request: Request) => {
           webhookRequest = request;
           return new Response('ok', { status: 200 });
@@ -62,7 +62,7 @@ describe('webhook delivery', () => {
       'fetch',
       vi
         .fn()
-        .mockResolvedValueOnce(Response.json(sampleOcrResult(document)))
+        .mockResolvedValueOnce(Response.json(sampleGoogleVisionResponse()))
         .mockImplementationOnce(async (request: Request) => {
           webhookRequest = request;
           return new Response('ok', { status: 200 });
@@ -84,7 +84,7 @@ describe('webhook delivery', () => {
     const job = await createJob(env, 'example-client-dev', document, new File(['abc'], 'receipt.png', { type: 'image/png' }), {
       callbackUrl: 'https://app.test/ocr/webhook',
     });
-    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(sampleOcrResult(document)));
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(sampleGoogleVisionResponse()));
     vi.stubGlobal('fetch', fetchMock);
 
     await processJob(env, job.jobId);
@@ -104,7 +104,7 @@ describe('webhook delivery', () => {
     const job = await createJob(env, 'example-client-dev', document, new File(['abc'], 'receipt.png', { type: 'image/png' }), {
       callbackUrl: 'https://app.test/ocr/webhook',
     });
-    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(sampleOcrResult(document)));
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(sampleGoogleVisionResponse()));
     vi.stubGlobal('fetch', fetchMock);
 
     await processJob(env, job.jobId);
@@ -126,7 +126,7 @@ describe('webhook delivery', () => {
     });
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValueOnce(Response.json(sampleOcrResult(document))).mockResolvedValueOnce(new Response('nope', { status: 503 })),
+      vi.fn().mockResolvedValueOnce(Response.json(sampleGoogleVisionResponse())).mockResolvedValueOnce(new Response('nope', { status: 503 })),
     );
 
     await processJob(env, job.jobId);
