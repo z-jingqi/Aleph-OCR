@@ -47,7 +47,9 @@ pnpm --dir apps/gateway exec wrangler secret put GOOGLE_VISION_CREDENTIALS_JSON 
 
 ## Generate Config
 
-Required environment variable:
+Manual Worker deploy uses generated Wrangler configs. The D1 database must already exist, and the deploy config needs its id so the Worker binding points at the right database.
+
+Required environment variable for manual deploy:
 
 ```bash
 export ALEPH_TOOLS_D1_DATABASE_ID_PREVIEW="<d1-id>"
@@ -58,7 +60,6 @@ Optional:
 ```bash
 export ALEPH_TOOLS_R2_BUCKET_PREVIEW="aleph-tools-assets-preview"
 export ALEPH_TOOLS_QUEUE_PREVIEW="aleph-tools-jobs-preview"
-export ALEPH_TOOLS_DOMAIN_PREVIEW="preview-tools.aleph-cat.com"
 export ALEPH_TOOLS_MAX_ACTIVE_JOBS_PER_CLIENT_PREVIEW="20"
 export ALEPH_TOOLS_MAX_ACTIVE_JOBS_GLOBAL_PREVIEW=""
 export ALEPH_TOOLS_MAX_IMAGE_UPLOAD_BYTES_PREVIEW="10485760"
@@ -72,43 +73,55 @@ pnpm deploy:generate:preview
 pnpm deploy:check:preview
 ```
 
-For CI checks:
+Generated configs are service-binding only with no custom route and `workers_dev=false`. Other Workers call the service through a Cloudflare Service Binding. See [service-binding.md](service-binding.md).
+
+## GitHub Actions
+
+GitHub Actions only validates the codebase and applies D1 migrations to existing databases. It does not create D1/R2/Queue resources, set Worker secrets, generate deployment configs, or deploy the Worker.
+
+Required GitHub secrets:
+
+- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_ACCOUNT_ID`
+
+Branch behavior:
+
+- `develop` runs migrations against `aleph-tools-preview`.
+- `main` runs migrations against `aleph-tools-prod`.
+
+The migration-only Wrangler configs intentionally omit D1 database ids. Wrangler resolves the remote D1 database by name and uses the config only for the migrations directory:
 
 ```bash
-pnpm deploy:check:ci:preview
-```
-
-## Migrate and Deploy
-
-```bash
-pnpm deploy:migrate:preview
-pnpm deploy:dry-run:preview
-pnpm deploy:preview
+pnpm migrate:check:preview
+pnpm migrate:preview
 ```
 
 Production uses the same commands with `prod`.
 
+## Migrate and Deploy Manually
+
+```bash
+pnpm migrate:preview
+pnpm deploy:dry-run:preview
+pnpm deploy:preview
+```
+
+Production uses the same commands with `prod`. `deploy:migrate:*` remains available as a compatibility alias for `migrate:*`.
+
 ## Post-deploy Smoke Test
 
-```bash
-curl https://preview-tools.aleph-cat.com/health
+Because the Worker has no public route, smoke test it from a calling Worker with a Service Binding:
 
-curl -X POST https://preview-tools.aleph-cat.com/v1/tools/ocr \
-  -H "Authorization: Bearer $ALEPH_TOOLS_API_KEY" \
-  -H "Idempotency-Key: smoke-$(date +%s)" \
-  -F "file=@apps/gateway/test/fixtures/images/receipt.png"
+```ts
+const response = await env.ALEPH_OCR.fetch('https://aleph-ocr.internal/health');
 ```
 
-Then poll or subscribe to:
-
-```bash
-curl https://preview-tools.aleph-cat.com/v1/jobs/<jobId> \
-  -H "Authorization: Bearer $ALEPH_TOOLS_API_KEY"
-```
+For OCR smoke tests, call `POST /v1/tools/ocr` through `env.ALEPH_OCR.fetch(...)` as shown in [service-binding.md](service-binding.md).
 
 ## Operational Notes
 
 - Google Vision errors are mapped into stable `error.code` values; business applications should branch on `error.code` and `data.status`, not on message text.
 - Cloudflare Images is used only for internal OCR input conversion.
 - Jobs and stored R2 source/result objects are retained for at most 3 days, then deleted by scheduled maintenance.
+- Cloudflare-hosted internal applications use Service Binding; public HTTP routes are not generated.
 - PDF, compression, standalone conversion, and custom OCR engines are intentionally out of scope for this version.

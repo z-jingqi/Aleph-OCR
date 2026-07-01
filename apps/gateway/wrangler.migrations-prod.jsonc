@@ -1,0 +1,12 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "aleph-tools-migrations-prod",
+  "compatibility_date": "2026-06-24",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "aleph-tools-prod",
+      "migrations_dir": "./migrations"
+    }
+  ]
+}

@@ -11,10 +11,8 @@ if (!environment || !['preview', 'prod'].includes(environment)) {
 
 const suffix = environment.toUpperCase();
 const appDir = resolve(repoRoot, 'apps', 'gateway');
-const defaultToolsDomain = environment === 'prod' ? 'tools.aleph-cat.com' : 'preview-tools.aleph-cat.com';
 const values = {
   __ENV__: environment,
-  __TOOLS_DOMAIN__: process.env[`ALEPH_TOOLS_DOMAIN_${suffix}`] ?? defaultToolsDomain,
   __D1_DATABASE_ID__: process.env[`ALEPH_TOOLS_D1_DATABASE_ID_${suffix}`] ?? '__D1_DATABASE_ID__',
   __R2_BUCKET__: process.env[`ALEPH_TOOLS_R2_BUCKET_${suffix}`] ?? `aleph-tools-assets-${environment}`,
   __QUEUE__: process.env[`ALEPH_TOOLS_QUEUE_${suffix}`] ?? `aleph-tools-jobs-${environment}`,
@@ -35,4 +33,4 @@ for (const [token, value] of Object.entries(values)) config = config.replaceAll(
 
 await mkdir(appDir, { recursive: true });
 await writeFile(resolve(appDir, `wrangler.generated-${environment}.json`), config);
-console.log(`Generated Aleph Tools ${environment} Wrangler config.`);
+console.log(`Generated Aleph Tools ${environment} Wrangler config for service-binding-only deployment.`);

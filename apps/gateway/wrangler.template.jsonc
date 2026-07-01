@@ -4,7 +4,7 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-06-24",
   "compatibility_flags": ["nodejs_compat"],
-  "workers_dev": true,
+  "workers_dev": false,
   "vars": {
     "APP_ENV": "__ENV__",
     "JOB_RETENTION_DAYS": "3",
@@ -34,6 +34,6 @@
     "consumers": [{ "queue": "__QUEUE__", "max_batch_size": 1, "max_batch_timeout": 10, "max_concurrency": __QUEUE_MAX_CONCURRENCY__ }]
   },
   "triggers": { "crons": ["17 3 * * *"] },
-  "routes": [{ "pattern": "__TOOLS_DOMAIN__", "custom_domain": true }],
+  "routes": [],
   "observability": { "enabled": true, "head_sampling_rate": 1 }
 }

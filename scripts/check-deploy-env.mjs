@@ -29,12 +29,6 @@ const checks = [
     note: `Defaults to aleph-tools-jobs-${environment}.`,
   },
   {
-    label: 'Custom domain',
-    required: false,
-    names: [`ALEPH_TOOLS_DOMAIN_${suffix}`],
-    note: environment === 'prod' ? 'Defaults to tools.aleph-cat.com.' : 'Defaults to preview-tools.aleph-cat.com.',
-  },
-  {
     label: 'Google Vision credentials',
     required: strictCi,
     names: ['GOOGLE_VISION_CREDENTIALS_JSON', 'GOOGLE_VISION_API_KEY'],
@@ -44,7 +38,7 @@ const checks = [
     label: 'API keys secret value',
     required: strictCi,
     names: ['ALEPH_TOOLS_API_KEYS'],
-    note: 'Set as a Worker secret with wrangler secret put or GitHub Actions secrets.',
+    note: 'Set as a Worker secret with wrangler secret put before manual deploy.',
   },
   {
     label: 'Webhook signing secrets',

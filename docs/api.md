@@ -156,12 +156,6 @@ Returns the original source image saved temporarily for the job. The R2 bucket r
 
 Source images are available while the job is not `deleted`, including `queued`, `processing`, `cancel_requested`, `ready`, `failed`, and `cancelled` jobs. Stored files are retained for at most 3 days. Deleted or expired jobs return `410 JOB_DELETED`.
 
-```bash
-curl "$ALEPH_TOOLS_URL/v1/jobs/job_123/source" \
-  -H "Authorization: Bearer $ALEPH_TOOLS_API_KEY" \
-  --output source-image
-```
-
 The response is the image byte stream with the original `Content-Type` and an inline `Content-Disposition` filename.
 
 If the job exists but the R2 source object is missing, the route returns `500 SOURCE_NOT_FOUND` with `retryable=true`.

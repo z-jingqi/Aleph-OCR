@@ -4,12 +4,7 @@ This document is the integration contract for business applications using Aleph 
 
 ## Environment
 
-Use the base URL and credentials assigned to your application:
-
-| Environment | Base URL |
-|---|---|
-| Preview | `https://preview-tools.aleph-cat.com` |
-| Production | `https://tools.aleph-cat.com` |
+Aleph Tools is deployed as a service-binding-only Cloudflare Worker. Calling applications must run in Cloudflare Workers or Pages Functions and declare a Service Binding to the Aleph Tools Worker.
 
 Every `/v1/*` request requires:
 
@@ -17,7 +12,9 @@ Every `/v1/*` request requires:
 Authorization: Bearer <api-key>
 ```
 
-Each API key maps to one stable internal `clientId`. Jobs, idempotency keys, and results are isolated by that client. The `clientId` is not currently returned in public API responses.
+Each API key maps to one stable internal `clientId`. Jobs, idempotency keys, and results are isolated by that client. The `clientId` is not returned in API responses.
+
+See [service-binding.md](service-binding.md) for the required `wrangler.jsonc` `services` entry and calling examples.
 
 ## Endpoint Summary
 
@@ -121,13 +118,20 @@ Idempotency behavior:
 
 `POST /v1/tools/ocr`
 
-```bash
-curl -X POST "$ALEPH_TOOLS_URL/v1/tools/ocr" \
-  -H "Authorization: Bearer $ALEPH_TOOLS_API_KEY" \
-  -H "Idempotency-Key: upload-123" \
-  -F "file=@receipt.heic" \
-  -F 'metadata={"source":"mobile","documentId":"doc_123"}' \
-  -F "callbackUrl=https://app.example.com/webhooks/aleph-tools"
+```ts
+const form = new FormData();
+form.append('file', file);
+form.append('metadata', JSON.stringify({ source: 'mobile', documentId: 'doc_123' }));
+form.append('callbackUrl', 'https://app.example.com/webhooks/aleph-tools');
+
+const response = await env.ALEPH_OCR.fetch('https://aleph-ocr.internal/v1/tools/ocr', {
+  method: 'POST',
+  headers: {
+    Authorization: `Bearer ${env.ALEPH_TOOLS_API_KEY}`,
+    'Idempotency-Key': 'upload-123',
+  },
+  body: form,
+});
 ```
 
 Successful response:
@@ -164,9 +168,10 @@ Successful response:
 
 `GET /v1/jobs/:jobId`
 
-```bash
-curl "$ALEPH_TOOLS_URL/v1/jobs/job_123" \
-  -H "Authorization: Bearer $ALEPH_TOOLS_API_KEY"
+```ts
+const response = await env.ALEPH_OCR.fetch('https://aleph-ocr.internal/v1/jobs/job_123', {
+  headers: { Authorization: `Bearer ${env.ALEPH_TOOLS_API_KEY}` },
+});
 ```
 
 Use these fields for client state:
@@ -194,9 +199,10 @@ Terminal statuses:
 
 Only `ready` jobs return OCR JSON. Active jobs return `409 JOB_NOT_READY`. Failed, cancelled, or deleted jobs return their terminal error code.
 
-```bash
-curl "$ALEPH_TOOLS_URL/v1/jobs/job_123/result" \
-  -H "Authorization: Bearer $ALEPH_TOOLS_API_KEY"
+```ts
+const response = await env.ALEPH_OCR.fetch('https://aleph-ocr.internal/v1/jobs/job_123/result', {
+  headers: { Authorization: `Bearer ${env.ALEPH_TOOLS_API_KEY}` },
+});
 ```
 
 Successful response:
@@ -273,10 +279,11 @@ The result does not promise table structure or field extraction. Business applic
 
 Returns the original source image saved temporarily for the job. The image is streamed through the authenticated API; R2 is not public and no permanent image URL is exposed.
 
-```bash
-curl "$ALEPH_TOOLS_URL/v1/jobs/job_123/source" \
-  -H "Authorization: Bearer $ALEPH_TOOLS_API_KEY" \
-  --output source-image
+```ts
+const response = await env.ALEPH_OCR.fetch('https://aleph-ocr.internal/v1/jobs/job_123/source', {
+  headers: { Authorization: `Bearer ${env.ALEPH_TOOLS_API_KEY}` },
+});
+const sourceImage = await response.blob();
 ```
 
 Behavior:
@@ -295,23 +302,7 @@ Content-Disposition: inline; filename="receipt.jpg"
 Cache-Control: private, max-age=300
 ```
 
-Browser display note: this endpoint requires an `Authorization` header, so frontend code cannot usually use it directly as `<img src="...">`. Do not expose `ALEPH_TOOLS_API_KEY` to untrusted browsers. Use one of these patterns:
-
-- Recommended for production: have your backend call Aleph Tools and proxy the image to your frontend under your own session authorization.
-- Acceptable only for internal or otherwise trusted clients: fetch with `Authorization`, convert the response to a `Blob`, then render an object URL.
-
-Example frontend blob rendering:
-
-```js
-async function loadSourcePreview(jobId, apiKey) {
-  const response = await fetch(`${ALEPH_TOOLS_URL}/v1/jobs/${jobId}/source`, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-  });
-  if (!response.ok) throw await response.json();
-  const blob = await response.blob();
-  return URL.createObjectURL(blob);
-}
-```
+Browser display note: do not expose `ALEPH_TOOLS_API_KEY` to browsers or mobile clients. If your product needs to show the source image, proxy it through your own calling Worker under your own session authorization.
 
 Aleph Tools does not provide a thumbnail endpoint. If your product needs thumbnails or long-term image display, generate and store those assets in your own application storage.
 
@@ -322,9 +313,10 @@ Aleph Tools does not provide a thumbnail endpoint. If your product needs thumbna
 
 Returns `text/event-stream`. On connect, the stream sends a `job.snapshot` event, then stored job events. The stream also sends `ping` events while waiting.
 
-```bash
-curl -N "$ALEPH_TOOLS_URL/v1/jobs/job_123/events" \
-  -H "Authorization: Bearer $ALEPH_TOOLS_API_KEY"
+```ts
+const response = await env.ALEPH_OCR.fetch('https://aleph-ocr.internal/v1/jobs/job_123/events', {
+  headers: { Authorization: `Bearer ${env.ALEPH_TOOLS_API_KEY}` },
+});
 ```
 
 Resume after reconnect:
@@ -448,9 +440,11 @@ Webhook delivery behavior:
 
 `POST /v1/jobs/:jobId/cancel`
 
-```bash
-curl -X POST "$ALEPH_TOOLS_URL/v1/jobs/job_123/cancel" \
-  -H "Authorization: Bearer $ALEPH_TOOLS_API_KEY"
+```ts
+const response = await env.ALEPH_OCR.fetch('https://aleph-ocr.internal/v1/jobs/job_123/cancel', {
+  method: 'POST',
+  headers: { Authorization: `Bearer ${env.ALEPH_TOOLS_API_KEY}` },
+});
 ```
 
 Behavior:
@@ -464,9 +458,11 @@ Behavior:
 
 `DELETE /v1/jobs/:jobId`
 
-```bash
-curl -X DELETE "$ALEPH_TOOLS_URL/v1/jobs/job_123" \
-  -H "Authorization: Bearer $ALEPH_TOOLS_API_KEY"
+```ts
+const response = await env.ALEPH_OCR.fetch('https://aleph-ocr.internal/v1/jobs/job_123', {
+  method: 'DELETE',
+  headers: { Authorization: `Bearer ${env.ALEPH_TOOLS_API_KEY}` },
+});
 ```
 
 Behavior:
