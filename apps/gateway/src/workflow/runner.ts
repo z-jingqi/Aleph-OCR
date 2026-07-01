@@ -61,7 +61,7 @@ export async function startToolWorkflow(env: Env, jobId: string, workflowId: str
     await workflow.create({
       id: workflowId,
       params: { jobId },
-      retention: { successRetention: '7 days', errorRetention: '14 days' },
+      retention: { successRetention: '3 days', errorRetention: '3 days' },
     });
     return;
   }

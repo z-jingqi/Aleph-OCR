@@ -41,23 +41,26 @@ Direct Google Vision OCR:
 - `webp`
 - `bmp`
 - `tiff`
+- `raw`
+- `dng`
 
 Internal conversion before OCR:
 
 - `heic`
 - `heif`
-- `avif`
 
 Unsupported:
 
 - PDF
 - SVG
+- AVIF
 - unknown image formats
 
 ## Reliability Rules
 
 - D1 job status is the source of truth.
 - R2 result is written before the job becomes `ready`.
+- R2 source/result objects and job records are retained for at most 3 days, then scheduled cleanup marks the job `deleted` and removes stored objects.
 - Webhook delivery is independent from OCR success and never rolls back a ready job.
 - Queue retry can re-run failed processing, but ready/cancelled/deleted jobs are not reprocessed.
 - Cancellation is honored before result storage.

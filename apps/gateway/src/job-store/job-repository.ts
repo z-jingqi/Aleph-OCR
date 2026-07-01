@@ -174,16 +174,39 @@ export async function claimJobForProcessing(
      SET status = ?, progress = ?, stage = ?, error = NULL, attempt_count = attempt_count + 1,
          processing_started_at = ?, processing_lease_until = ?, updated_at = ?
      WHERE job_id = ?
-       AND status IN ('queued', 'failed')
-       AND status NOT IN ('deleted', 'cancel_requested', 'cancelled', 'ready')`,
+       AND status = ?`,
   )
-    .bind('processing', 10, 'processing', nowIso, leaseUntil, nowIso, jobId)
+    .bind('processing', 10, 'processing', nowIso, leaseUntil, nowIso, jobId, 'queued')
     .run();
 
   if (!hasChangedRows(result)) return null;
   const job = await getJobForProcessing(env, jobId);
   if (job) await appendJobEvent(env, job, 'job.status');
   return job;
+}
+
+export async function abandonUnstartedJob(
+  env: JobStoreEnv & { DB: D1Database; ASSETS: R2Bucket },
+  job: StoredJob,
+  error: string,
+): Promise<boolean> {
+  const timestamp = new Date().toISOString();
+  const update = await env.DB.prepare(
+    `UPDATE tool_jobs
+     SET status = ?, progress = ?, stage = ?, error = ?, result_r2_key = NULL,
+         idempotency_key = NULL, idempotency_fingerprint = NULL,
+         processing_started_at = NULL, processing_lease_until = NULL,
+         completed_at = ?, updated_at = ?
+     WHERE job_id = ? AND status = ? AND attempt_count = 0 AND processing_started_at IS NULL`,
+  )
+    .bind('deleted', 100, 'deleted', error, timestamp, timestamp, job.jobId, 'queued')
+    .run();
+
+  if (!hasChangedRows(update)) return false;
+  const abandoned = (await getJobForProcessing(env, job.jobId)) ?? { ...job, status: 'deleted' as const, progress: 100, stage: 'deleted' as const };
+  await deleteJobObjects(env, abandoned);
+  await appendJobEvent(env, abandoned, 'job.deleted');
+  return true;
 }
 
 export async function attachWorkflowId(

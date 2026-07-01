@@ -6,7 +6,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "vars": {
-    "JOB_RETENTION_DAYS": "7",
+    "JOB_RETENTION_DAYS": "3",
     "MAX_ACTIVE_JOBS_GLOBAL": "1",
     "MAX_ACTIVE_JOBS_PER_CLIENT": "20",
     "MAX_IMAGE_UPLOAD_BYTES": "10485760",

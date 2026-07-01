@@ -11,7 +11,7 @@ export const OcrDocumentSchema = z.object({
 });
 export type OcrDocument = z.infer<typeof OcrDocumentSchema>;
 
-export type ImageInputFormat = 'jpeg' | 'png' | 'gif' | 'webp' | 'tiff' | 'bmp' | 'heic' | 'heif' | 'avif';
+export type ImageInputFormat = 'jpeg' | 'png' | 'gif' | 'webp' | 'tiff' | 'bmp' | 'raw' | 'dng' | 'heic' | 'heif';
 
 const IMAGE_FORMAT_MIME_TYPES: Record<ImageInputFormat, string> = {
   jpeg: 'image/jpeg',
@@ -20,9 +20,10 @@ const IMAGE_FORMAT_MIME_TYPES: Record<ImageInputFormat, string> = {
   webp: 'image/webp',
   tiff: 'image/tiff',
   bmp: 'image/bmp',
+  raw: 'image/x-raw',
+  dng: 'image/x-adobe-dng',
   heic: 'image/heic',
   heif: 'image/heif',
-  avif: 'image/avif',
 };
 
 const MIME_TO_IMAGE_FORMAT = new Map<string, ImageInputFormat>([
@@ -35,9 +36,15 @@ const MIME_TO_IMAGE_FORMAT = new Map<string, ImageInputFormat>([
   ['image/x-tiff', 'tiff'],
   ['image/bmp', 'bmp'],
   ['image/x-ms-bmp', 'bmp'],
+  ['image/raw', 'raw'],
+  ['image/x-raw', 'raw'],
+  ['image/dng', 'dng'],
+  ['image/x-dng', 'dng'],
+  ['image/x-adobe-dng', 'dng'],
   ['image/heic', 'heic'],
+  ['image/heic-sequence', 'heic'],
   ['image/heif', 'heif'],
-  ['image/avif', 'avif'],
+  ['image/heif-sequence', 'heif'],
 ]);
 
 const EXTENSION_TO_IMAGE_FORMAT = new Map<string, ImageInputFormat>([
@@ -49,14 +56,15 @@ const EXTENSION_TO_IMAGE_FORMAT = new Map<string, ImageInputFormat>([
   ['tif', 'tiff'],
   ['tiff', 'tiff'],
   ['bmp', 'bmp'],
+  ['raw', 'raw'],
+  ['dng', 'dng'],
   ['heic', 'heic'],
   ['heif', 'heif'],
-  ['avif', 'avif'],
 ]);
 
 const KNOWN_IMAGE_EXTENSIONS = new Set([...EXTENSION_TO_IMAGE_FORMAT.keys(), 'svg']);
 
-const GOOGLE_VISION_NATIVE_IMAGE_FORMATS = new Set<ImageInputFormat>(['jpeg', 'png', 'gif', 'webp', 'tiff', 'bmp']);
+const GOOGLE_VISION_NATIVE_IMAGE_FORMATS = new Set<ImageInputFormat>(['jpeg', 'png', 'gif', 'webp', 'tiff', 'bmp', 'raw', 'dng']);
 const CLOUDFLARE_IMAGES_CONVERTIBLE_FORMATS = new Set<ImageInputFormat>([
   'jpeg',
   'png',
@@ -64,9 +72,10 @@ const CLOUDFLARE_IMAGES_CONVERTIBLE_FORMATS = new Set<ImageInputFormat>([
   'webp',
   'tiff',
   'bmp',
+  'raw',
+  'dng',
   'heic',
   'heif',
-  'avif',
 ]);
 
 export function imageFormatFromFile(mimeType: string, filename = ''): ImageInputFormat | null {

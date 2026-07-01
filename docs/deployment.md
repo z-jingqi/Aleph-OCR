@@ -110,4 +110,5 @@ curl https://preview-tools.aleph-cat.com/v1/jobs/<jobId> \
 
 - Google Vision errors are mapped into stable `error.code` values; business applications should branch on `error.code` and `data.status`, not on message text.
 - Cloudflare Images is used only for internal OCR input conversion.
+- Jobs and stored R2 source/result objects are retained for at most 3 days, then deleted by scheduled maintenance.
 - PDF, compression, standalone conversion, and custom OCR engines are intentionally out of scope for this version.

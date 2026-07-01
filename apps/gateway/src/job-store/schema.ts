@@ -138,14 +138,17 @@ export const RESULT_PREFIX = 'results';
 export const PROCESSING_LEASE_SECONDS = 15 * 60;
 export const WEBHOOK_RETRY_DELAYS_SECONDS = [60, 5 * 60, 15 * 60, 60 * 60, 6 * 60 * 60];
 export const TERMINAL_STATUSES = new Set<JobStatus>(['ready', 'failed', 'cancelled', 'deleted']);
+export const DEFAULT_JOB_RETENTION_DAYS = 3;
+export const MAX_JOB_RETENTION_DAYS = 3;
 
 export function requireStorage<T extends JobStoreEnv>(env: T): asserts env is T & { DB: D1Database; ASSETS: R2Bucket } {
   if (!env.DB || !env.ASSETS) throw new Error('D1 and R2 bindings are required');
 }
 
 export function retentionDays(env: JobStoreEnv): number {
-  const parsed = Number(env.JOB_RETENTION_DAYS ?? 7);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 7;
+  const parsed = Number(env.JOB_RETENTION_DAYS ?? DEFAULT_JOB_RETENTION_DAYS);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_JOB_RETENTION_DAYS;
+  return Math.min(parsed, MAX_JOB_RETENTION_DAYS);
 }
 
 export function safeR2Name(filename: string): string {

@@ -4,7 +4,7 @@ import { validateOcrImageInput } from '../http/file-types';
 import { buildIdempotencyFingerprint, normalizeIdempotencyKey } from '../http/idempotency';
 import { engineErrorResponse, jsonError, jsonSuccess, parsedUploadError } from '../http/responses';
 import { readUploadedFile } from '../http/uploads';
-import { createJob, getJobByIdempotencyKey, publicJob, requireStorage } from '../job-store';
+import { abandonUnstartedJob, createJob, getJobByIdempotencyKey, publicJob, requireStorage } from '../job-store';
 import { ocrImage } from '../ocr-client';
 import { prepareOcrInput } from '../ocr-input';
 import { startToolWorkflow } from '../workflow/runner';
@@ -102,7 +102,13 @@ export function registerOcrRoutes(app: GatewayApp) {
         toolOptions: { provider: 'google-vision', feature: 'DOCUMENT_TEXT_DETECTION', autoConvert: true },
         workflowId,
       });
-      await startToolWorkflow(c.env, job.jobId, job.workflowId ?? workflowId);
+      try {
+        await startToolWorkflow(c.env, job.jobId, job.workflowId ?? workflowId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Could not start OCR workflow';
+        await abandonUnstartedJob(c.env, job, `Workflow start failed: ${message}`);
+        throw error;
+      }
       return jsonSuccess(c, publicJob(job), 202);
     } catch (error) {
       return jsonError(c, 'INTERNAL_ERROR', error instanceof Error ? error.message : 'Could not create OCR job', 500, { retryable: true });

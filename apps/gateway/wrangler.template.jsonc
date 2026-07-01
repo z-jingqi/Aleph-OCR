@@ -7,7 +7,7 @@
   "workers_dev": true,
   "vars": {
     "APP_ENV": "__ENV__",
-    "JOB_RETENTION_DAYS": "7",
+    "JOB_RETENTION_DAYS": "3",
     "MAX_ACTIVE_JOBS_PER_CLIENT": "__MAX_ACTIVE_JOBS_PER_CLIENT__",
     "MAX_ACTIVE_JOBS_GLOBAL": "__MAX_ACTIVE_JOBS_GLOBAL__",
     "MAX_IMAGE_UPLOAD_BYTES": "__MAX_IMAGE_UPLOAD_BYTES__"

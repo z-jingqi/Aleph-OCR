@@ -3,11 +3,14 @@ import {
   deleteJob,
   getJob,
   getResult,
+  getSourceFile,
   publicJob,
   requestJobCancel,
   requireStorage,
+  type StoredJob,
 } from '../job-store';
 import { createJobEventStream } from '../sse';
+import type { AppContext } from '../types';
 import { deliverDueWebhooks } from '../webhooks';
 import type { GatewayApp } from './types';
 
@@ -59,6 +62,24 @@ export function registerJobRoutes(app: GatewayApp) {
     }
   });
 
+  app.get('/v1/jobs/:jobId/source', async (c) => {
+    try {
+      requireStorage(c.env);
+      const jobId = c.req.param('jobId');
+      const job = await getJob(c.env, c.get('clientId'), jobId);
+      if (!job) return jsonError(c, 'JOB_NOT_FOUND', 'Job not found', 404, { retryable: false, jobId });
+      if (job.status === 'deleted') return deletedJobError(c, job);
+      const source = await getSourceFile(c.env, job);
+      if (!source) return sourceNotFoundError(c, job);
+
+      return new Response(source.body, {
+        headers: sourceHeaders(job),
+      });
+    } catch (error) {
+      return jsonError(c, 'INTERNAL_ERROR', error instanceof Error ? error.message : 'Could not read source image', 500, { retryable: true });
+    }
+  });
+
   app.get('/v1/jobs/:jobId/events', async (c) => {
     try {
       requireStorage(c.env);
@@ -91,4 +112,43 @@ export function registerJobRoutes(app: GatewayApp) {
       return jsonError(c, 'INTERNAL_ERROR', error instanceof Error ? error.message : 'Could not delete job', 500, { retryable: true });
     }
   });
+}
+
+function deletedJobError(c: AppContext, job: StoredJob): Response {
+  return jsonError(c, 'JOB_DELETED', 'Job has been deleted', 410, {
+    retryable: false,
+    jobId: job.jobId,
+    jobStatus: job.status,
+    stage: job.stage,
+    terminal: true,
+  });
+}
+
+function sourceNotFoundError(c: AppContext, job: StoredJob): Response {
+  console.error('Job source object is missing', JSON.stringify({ requestId: c.get('requestId'), jobId: job.jobId, clientId: c.get('clientId') }));
+  return jsonError(c, 'SOURCE_NOT_FOUND', 'Job source object is missing', 500, {
+    retryable: true,
+    jobId: job.jobId,
+    jobStatus: job.status,
+    stage: job.stage,
+    terminal: true,
+  });
+}
+
+function sourceHeaders(job: StoredJob, contentType = job.document.mimeType || 'application/octet-stream', filename = job.document.filename): Headers {
+  return new Headers({
+    'Content-Type': contentType,
+    'Content-Disposition': inlineContentDisposition(filename || 'source'),
+    'Cache-Control': 'private, max-age=300',
+  });
+}
+
+function inlineContentDisposition(filename: string): string {
+  const cleaned = filename.replace(/[\r\n]/g, '').trim() || 'source';
+  const ascii = cleaned.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_') || 'source';
+  return `inline; filename="${ascii.slice(0, 180)}"; filename*=UTF-8''${encodeRfc5987(cleaned)}`;
+}
+
+function encodeRfc5987(value: string): string {
+  return encodeURIComponent(value).replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
 }

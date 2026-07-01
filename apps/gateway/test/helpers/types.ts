@@ -64,6 +64,7 @@ export type FakeGatewayEnv = {
   GOOGLE_VISION_API_KEY?: string;
   GOOGLE_VISION_CREDENTIALS_JSON?: string;
   GOOGLE_VISION_ENDPOINT?: string;
+  JOB_RETENTION_DAYS?: string;
   MAX_JOB_ATTEMPTS?: string;
   MAX_ACTIVE_JOBS_PER_CLIENT?: string;
   MAX_ACTIVE_JOBS_GLOBAL?: string;

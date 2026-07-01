@@ -4,6 +4,7 @@ import {
   claimJobForProcessing,
   createJob,
   deleteJob,
+  failJob,
   getJobByIdempotencyKey,
   getJob,
   getResult,
@@ -34,6 +35,7 @@ describe('durable job store', () => {
       callbackUrl: 'https://app.test/ocr/webhook',
       callbackMetadata: { documentId: 'doc_123' },
     });
+    expect(new Date(job.expiresAt).getTime() - new Date(job.createdAt).getTime()).toBe(3 * 86400000);
 
     const events = await listJobEvents(env, 'example-client-dev', job.jobId);
     expect(events).toHaveLength(1);
@@ -85,6 +87,30 @@ describe('durable job store', () => {
       [2, 'job.status'],
       [3, 'job.progress'],
     ]);
+  });
+
+  it('caps job retention at three days even when configured higher', async () => {
+    const env = fakeEnv({ JOB_RETENTION_DAYS: '30' });
+    const document: OcrDocument = { type: 'image', filename: 'receipt.png', mimeType: 'image/png', sizeBytes: 3 };
+    const job = await createJob(env, 'example-client-dev', document, new File(['abc'], 'receipt.png', { type: 'image/png' }));
+
+    expect(new Date(job.expiresAt).getTime() - new Date(job.createdAt).getTime()).toBe(3 * 86400000);
+  });
+
+  it('does not reclaim terminal failed jobs', async () => {
+    const env = fakeEnv();
+    const document: OcrDocument = { type: 'image', filename: 'receipt.png', mimeType: 'image/png', sizeBytes: 3 };
+    const job = await createJob(env, 'example-client-dev', document, new File(['abc'], 'receipt.png', { type: 'image/png' }));
+    const claimed = await claimJobForProcessing(env, job.jobId);
+    await failJob(env, claimed!, 'terminal failure');
+
+    await expect(claimJobForProcessing(env, job.jobId)).resolves.toBeNull();
+    expect(await getJob(env, 'example-client-dev', job.jobId)).toMatchObject({
+      status: 'failed',
+      stage: 'failed',
+      error: 'terminal failure',
+      attemptCount: 1,
+    });
   });
 
   it('stores result in R2 before marking ready and creating webhook delivery', async () => {

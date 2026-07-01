@@ -16,6 +16,8 @@ API keys are configured in `ALEPH_TOOLS_API_KEYS`, keyed by stable `clientId`.
 
 `POST /v1/tools/ocr`
 
+Content type must be `multipart/form-data`.
+
 Multipart fields:
 
 | Field | Required | Description |
@@ -24,17 +26,30 @@ Multipart fields:
 | `callbackUrl` | No | HTTPS webhook URL for terminal events. |
 | `metadata` | No | JSON object string echoed in webhook payloads. |
 
+Unknown multipart fields are rejected.
+
 Headers:
 
 | Header | Required | Description |
 |---|---:|---|
-| `Idempotency-Key` | No | Reusing the same key with the same file returns the original job. Reusing it with a different file returns `IDEMPOTENCY_CONFLICT`. |
+| `Idempotency-Key` | No | At most 256 characters. Reusing the same key with the same upload identity returns the original job. Reusing it with a different upload identity returns `IDEMPOTENCY_CONFLICT`. |
 
-Supported direct OCR formats: `jpeg`, `png`, `gif`, `webp`, `bmp`, `tiff`.
+Limits:
 
-Auto-converted before OCR: `heic`, `heif`, `avif`. Conversion is internal and always targets JPEG.
+| Limit | Value |
+|---|---|
+| Default async upload size | 10 MiB unless the deployment overrides `MAX_IMAGE_UPLOAD_BYTES`. |
+| Sync OCR upload size | 10 MiB. |
+| `metadata` field | 4096 bytes. |
+| `Idempotency-Key` | 256 characters. |
 
-Unsupported in this version: PDF and unknown image formats.
+Idempotency fingerprinting currently uses filename, MIME type, size, tool, operation, and tool options. It is not a content hash.
+
+Supported direct OCR formats: `jpeg`, `png`, `gif`, `webp`, `bmp`, `tiff`, `raw`, `dng`.
+
+Auto-converted before OCR: `heic`, `heif`. Conversion is internal and always targets JPEG.
+
+Unsupported in this version: PDF, AVIF, and unknown image formats.
 
 Response:
 
@@ -133,17 +148,66 @@ Result shape:
 }
 ```
 
+## Job Source Image
+
+`GET /v1/jobs/:jobId/source`
+
+Returns the original source image saved temporarily for the job. The R2 bucket remains private; callers must use this authenticated Worker route.
+
+Source images are available while the job is not `deleted`, including `queued`, `processing`, `cancel_requested`, `ready`, `failed`, and `cancelled` jobs. Stored files are retained for at most 3 days. Deleted or expired jobs return `410 JOB_DELETED`.
+
+```bash
+curl "$ALEPH_TOOLS_URL/v1/jobs/job_123/source" \
+  -H "Authorization: Bearer $ALEPH_TOOLS_API_KEY" \
+  --output source-image
+```
+
+The response is the image byte stream with the original `Content-Type` and an inline `Content-Disposition` filename.
+
+If the job exists but the R2 source object is missing, the route returns `500 SOURCE_NOT_FOUND` with `retryable=true`.
+
 ## Events
 
 `GET /v1/jobs/:jobId/events`
 
 Returns `text/event-stream`. On connect, the stream sends a `job.snapshot` event, then stored job events. Clients may reconnect with `Last-Event-ID`.
 
+Stored event names:
+
+- `job.created`
+- `job.status`
+- `job.progress`
+- `job.ready`
+- `job.failed`
+- `job.cancel_requested`
+- `job.cancelled`
+- `job.deleted`
+
+The stream may also emit `ping` events while waiting.
+
 ## Cancel
 
 `POST /v1/jobs/:jobId/cancel`
 
 Queued jobs become `cancelled`. Processing jobs become `cancel_requested` and will stop before writing `ready` if cancellation is observed before result storage.
+
+## Delete
+
+`DELETE /v1/jobs/:jobId`
+
+Deletes source/result objects and marks the job `deleted`. Deleted jobs cannot return the result or source image.
+
+## Engine Info
+
+`GET /v1/engines`
+
+Returns current OCR engine metadata. The provider is currently `google-vision` with `DOCUMENT_TEXT_DETECTION`.
+
+## Health
+
+`GET /health`
+
+Returns service health metadata. This route is outside `/v1` and does not require API-key authentication.
 
 ## Error Shape
 
@@ -171,11 +235,21 @@ Important codes:
 
 | Code | Meaning |
 |---|---|
+| `VALIDATION_ERROR` | Request shape, unsupported field, malformed metadata, or idempotency key length is invalid. |
+| `UNAUTHORIZED` | Missing or invalid API key. |
+| `STORAGE_UNAVAILABLE` | D1 or R2 binding is unavailable. |
+| `WORKFLOW_UNAVAILABLE` | Workflow/queue processing backend is unavailable. |
 | `UNSUPPORTED_MEDIA_TYPE` | Not an image, or PDF uploaded. |
 | `UNSUPPORTED_FORMAT` | Image format cannot be converted for OCR. |
+| `FILE_TOO_LARGE` | Uploaded image exceeds configured limit. |
 | `ENGINE_UNAVAILABLE` | Google Vision or Cloudflare Images is unavailable or misconfigured. |
 | `RATE_LIMITED` | Google Vision quota/rate limit. |
+| `JOB_NOT_FOUND` | Job is missing or belongs to another client/API key. |
 | `JOB_NOT_READY` | Result requested before `ready`. |
 | `JOB_FAILED` | Terminal failed job. |
 | `JOB_CANCELLED` | Terminal cancelled job. |
+| `JOB_DELETED` | Terminal deleted job. |
 | `RESULT_NOT_FOUND` | Ready job result object is missing; report `requestId` and `jobId`. |
+| `SOURCE_NOT_FOUND` | Job source object is missing; report `requestId` and `jobId`. |
+| `IDEMPOTENCY_CONFLICT` | Same idempotency key was used with a different upload identity. |
+| `INTERNAL_ERROR` | Unexpected service error. |

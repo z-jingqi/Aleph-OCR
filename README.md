@@ -14,9 +14,9 @@ Client app
 
 ## Current Scope
 
-- Supported: image OCR for `jpeg`, `png`, `gif`, `webp`, `bmp`, and `tiff`.
-- Auto-converted before OCR: `heic`, `heif`, and `avif`, converted to JPEG through Cloudflare Images.
-- Not supported in this version: PDF OCR, image compression, standalone image conversion tools, local OCR models, and container OCR runtime.
+- Supported: image OCR for `jpeg`, `png`, `gif`, `webp`, `bmp`, `tiff`, `raw`, and `dng`.
+- Auto-converted before OCR: `heic` and `heif`, converted to JPEG through Cloudflare Images.
+- Not supported in this version: PDF OCR, AVIF input, image compression, standalone image conversion tools, local OCR models, and container OCR runtime.
 
 ## API
 
@@ -50,6 +50,16 @@ Read result when `resultAvailable` is true:
 curl https://preview-tools.aleph-cat.com/v1/jobs/<jobId>/result \
   -H "Authorization: Bearer $ALEPH_TOOLS_API_KEY"
 ```
+
+Read the temporarily saved source image:
+
+```bash
+curl https://preview-tools.aleph-cat.com/v1/jobs/<jobId>/source \
+  -H "Authorization: Bearer $ALEPH_TOOLS_API_KEY" \
+  --output source-image
+```
+
+Source images are retained for at most 3 days and are unavailable after the job is deleted or expires. Aleph Tools does not provide a thumbnail endpoint; external applications should generate/store their own thumbnails if needed.
 
 Local/debug sync OCR is available only when `ENABLE_SYNC_ENDPOINTS=true`:
 

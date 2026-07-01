@@ -9,6 +9,7 @@ export {
 } from './job-store/schema';
 export { appendJobEvent, listJobEvents } from './job-store/event-repository';
 export {
+  abandonUnstartedJob,
   cleanupExpiredJobs,
   claimJobForProcessing,
   completeCancelledJob,

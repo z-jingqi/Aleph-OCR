@@ -31,7 +31,7 @@ fi
 
 ensure_dev_var "ALEPH_TOOLS_API_KEYS" '{"example-client-dev":"dev-key"}'
 ensure_dev_var "ALEPH_TOOLS_WEBHOOK_SECRETS" '{"example-client-dev":"dev-webhook-secret"}'
-ensure_dev_var "JOB_RETENTION_DAYS" "7"
+ensure_dev_var "JOB_RETENTION_DAYS" "3"
 
 if ! grep -q '^GOOGLE_VISION_' "${GATEWAY_DIR}/.dev.vars"; then
   cat <<'EOF'

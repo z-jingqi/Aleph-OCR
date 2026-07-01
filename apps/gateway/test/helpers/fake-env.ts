@@ -20,7 +20,7 @@ export function fakeEnv(overrides: Partial<FakeGatewayEnv> = {}): FakeGatewayEnv
     ALEPH_TOOLS_WEBHOOK_SECRETS: '{"example-client-dev":"test-webhook-secret","other-client":"other-webhook-secret"}',
     GOOGLE_VISION_API_KEY: 'test-google-key',
     ENABLE_SYNC_ENDPOINTS: 'true',
-    IMAGES: fakeImagesBinding(),
+    IMAGES: undefined as ImagesBinding | undefined,
     rows,
     events,
     deliveries,
@@ -67,16 +67,21 @@ export function fakeEnv(overrides: Partial<FakeGatewayEnv> = {}): FakeGatewayEnv
       };
     },
   } as unknown as R2Bucket;
-  (env as FakeGatewayEnv & { TOOLS_WORKFLOW?: Workflow<{ jobId: string }> }).TOOLS_WORKFLOW = {
-    async create(options: { id?: string; params?: { jobId: string } }) {
-      workflowCreates.push(options);
-      return {} as WorkflowInstance;
-    },
-  } as unknown as Workflow<{ jobId: string }>;
+  if (!env.TOOLS_WORKFLOW) {
+    (env as FakeGatewayEnv & { TOOLS_WORKFLOW?: Workflow<{ jobId: string }> }).TOOLS_WORKFLOW = {
+      async create(options: { id?: string; params?: { jobId: string } }) {
+        workflowCreates.push(options);
+        return {} as WorkflowInstance;
+      },
+    } as unknown as Workflow<{ jobId: string }>;
+  }
+  if (!Object.prototype.hasOwnProperty.call(overrides, 'IMAGES')) {
+    env.IMAGES = fakeImagesBinding(env as FakeGatewayEnv);
+  }
   return env as FakeGatewayEnv;
 }
 
-function fakeImagesBinding(): ImagesBinding {
+function fakeImagesBinding(env: FakeGatewayEnv): ImagesBinding {
   return {
     async info() {
       return { format: 'image/jpeg', fileSize: 3, width: 100, height: 100 };

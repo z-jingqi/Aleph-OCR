@@ -30,6 +30,7 @@ export class FakeStatement {
     else if (sql.includes('update tool_jobs') && sql.includes('cancelled_at = ?')) changes = this.requestCancel();
     else if (sql.includes('update tool_jobs') && sql.includes('coalesce(cancelled_at')) changes = this.completeCancel();
     else if (sql.includes('update tool_jobs') && sql.includes('completed_at = null') && sql.includes('where job_id = ? and status = ?')) changes = this.requeueJobForRetry();
+    else if (sql.includes('update tool_jobs') && sql.includes('idempotency_key = null')) changes = this.abandonUnstartedJob();
     else if (sql.includes('update tool_jobs') && sql.includes('where job_id = ? and status = ?')) changes = this.resetExpiredJob();
     else if (sql.includes('update tool_jobs') && sql.includes('coalesce')) changes = this.updateProgress();
     else if (sql.includes('update tool_jobs') && sql.includes('result_r2_key = ?')) changes = this.setReady();
@@ -104,9 +105,9 @@ export class FakeStatement {
   }
 
   private claimJob() {
-    const [status, progress, stage, startedAt, leaseUntil, updatedAt, jobId] = this.params;
+    const [status, progress, stage, startedAt, leaseUntil, updatedAt, jobId, expectedStatus] = this.params;
     const row = this.env.rows.get(jobId as string);
-    if (!row || !['queued', 'failed'].includes(row.status)) return 0;
+    if (!row || row.status !== expectedStatus) return 0;
     Object.assign(row, {
       status,
       progress,
@@ -214,6 +215,26 @@ export class FakeStatement {
       total_pages: totalPages as number | null,
       result_r2_key: resultR2Key,
       error: null,
+      processing_started_at: null,
+      processing_lease_until: null,
+      completed_at: completedAt,
+      updated_at: updatedAt,
+    });
+    return 1;
+  }
+
+  private abandonUnstartedJob() {
+    const [status, progress, stage, error, completedAt, updatedAt, jobId, expectedStatus] = this.params;
+    const row = this.env.rows.get(jobId as string);
+    if (!row || row.status !== expectedStatus || row.attempt_count !== 0 || row.processing_started_at !== null) return 0;
+    Object.assign(row, {
+      status,
+      progress,
+      stage,
+      error,
+      result_r2_key: null,
+      idempotency_key: null,
+      idempotency_fingerprint: null,
       processing_started_at: null,
       processing_lease_until: null,
       completed_at: completedAt,
