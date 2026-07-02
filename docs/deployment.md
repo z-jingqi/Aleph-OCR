@@ -87,7 +87,7 @@ Required GitHub secrets:
 Branch behavior:
 
 - `develop` runs migrations against `aleph-tools-preview`.
-- `main` runs migrations against `aleph-tools-prod`.
+- `main` currently runs validation only. Production migrations are disabled until `aleph-tools-prod` resources and production Cloudflare token access are ready.
 
 The migration-only Wrangler configs intentionally omit D1 database ids. Wrangler resolves the remote D1 database by name and uses the config only for the migrations directory:
 
@@ -96,7 +96,7 @@ pnpm migrate:check:preview
 pnpm migrate:preview
 ```
 
-Production uses the same commands with `prod`.
+Production uses the same commands with `prod` when production is ready, but GitHub Actions does not run them yet.
 
 ## Migrate and Deploy Manually
 

@@ -22,10 +22,10 @@ jobs:
       - run: pnpm test
       - run: pnpm build
   migrate-database:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.ref_name == 'develop'
     needs: check
     runs-on: ubuntu-latest
-    environment: ${{ github.ref_name == 'main' && 'production' || 'preview' }}
+    environment: preview
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -33,11 +33,11 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
-      - run: pnpm migrate:check:${{ github.ref_name == 'main' && 'prod' || 'preview' }}
+      - run: pnpm migrate:check:preview
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      - run: pnpm migrate:${{ github.ref_name == 'main' && 'prod' || 'preview' }}
+      - run: pnpm migrate:preview
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
